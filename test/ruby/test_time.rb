@@ -736,6 +736,19 @@ class TestTime < Test::Unit::TestCase
     assert_nil(t.getlocal("+02:00").zone)
   end
 
+  def test_zone_win32
+    env = {}
+    env["TZ"]="あ€A"
+    env["LC_ALL"]=nil
+    env["LC_CTYPE"]=nil
+    env["LANG"]=".utf8"
+    assert_equal(EnvUtil.invoke_ruby([env, '-e', 'print Time.now.zone'], '', true)[0], "あ€A")
+    env["LC_CTYPE"]=".932" # Windows-31J
+    assert_equal(EnvUtil.invoke_ruby([env, '-e', 'print Time.now.zone'], '', true)[0], "あ?A")
+    env["LC_ALL"]="C" # US-ASCII
+    refute_equal(EnvUtil.invoke_ruby([env, '-e', 'print Time.now.zone'], '', true)[0][0], "あ")
+  end if /mswin|mingw/ =~ RUBY_PLATFORM
+
   def test_plus_minus
     t2000 = get_t2000
     # assert_raise(RangeError) { t2000 + 10000000000 }

@@ -34,6 +34,7 @@
 #include <errno.h>
 #include <assert.h>
 #include <ctype.h>
+#include <locale.h>
 
 #include <windows.h>
 #include <winbase.h>
@@ -8398,4 +8399,84 @@ rb_w32_mprotect(void *addr, size_t len, int prot)
         }
     }
     return 0;
+}
+
+int
+rb_w32_crt_codepage(void)
+{
+    UINT codepage = 0;
+    char *ctype;
+
+    ctype = setlocale(LC_CTYPE, NULL);
+    if (ctype && strcmp(ctype, "C") == 0) {
+        return 0;
+    } else {
+        char *cp_str = strchr(ctype, '.');
+        if (cp_str && strlen(cp_str) >= 2) {
+            // "Japanese_Japan.932"
+            // "ja_JP.utf8"
+            codepage = atoi(cp_str + 1);
+            if (codepage == 0 && strlen(cp_str) >= 5) {
+                if (TOLOWER(cp_str[1]) == 'u' &&
+                    TOLOWER(cp_str[2]) == 't' &&
+                    TOLOWER(cp_str[3]) == 'f' &&
+                   (cp_str[4] == '8' ||
+                   (cp_str[4] == '-' || cp_str[5] == '8'))) {
+                    return CP_UTF8;
+                }
+            }
+        } else {
+            // "ja"
+            // "ja_JP"
+            // "ja_JP."
+            int length = MultiByteToWideChar(CP_ACP, 0, ctype, -1, NULL, 0);
+            char *sep = ctype;
+            WCHAR *buffer = _alloca(length * sizeof(WCHAR));
+            MultiByteToWideChar(CP_ACP, 0, ctype, -1, buffer, length);
+            while (NULL != (sep = strchr(sep, '_'))) {
+                // older windows needs this. observed in windows 6.1
+                buffer[sep++ - ctype] = L'-'; 
+            }
+            if (cp_str)
+                buffer[cp_str - ctype] = L'\0';
+            if (IsValidLocaleName(buffer)) {
+                GetLocaleInfoEx(buffer, LOCALE_IDEFAULTANSICODEPAGE | LOCALE_RETURN_NUMBER, (void*)&codepage, sizeof(UINT) / sizeof(WCHAR));
+            }
+        }
+    }
+    if (!codepage) codepage = GetACP();
+    if (!codepage) codepage = CP_UTF8;
+    return codepage;
+}
+
+#define SIZEOF_CP_NAME ((sizeof(UINT) * 8 / 3) + 4)
+#define CP_FORMAT(buf, codepage) snprintf(buf, sizeof(buf), "CP%u", (codepage))
+
+// similar to locale_charmap() in localeinit.c
+
+static VALUE
+rb_w32_locale_charmap(VALUE (*conv)(const char *))
+{
+    char cp[SIZEOF_CP_NAME];
+    UINT codepage = rb_w32_crt_codepage();
+    if (codepage) {
+      CP_FORMAT(cp, codepage);
+      return (*conv)(cp);
+    } else {
+      return (*conv)("ANSI_X3.4-1968");
+    }
+}
+
+static VALUE
+enc_find_index(const char *name)
+{
+    return (VALUE)rb_enc_find_index(name);
+}
+
+// similar to rb_locale_encoding()
+
+int
+rb_w32_crt_encindex(void)
+{
+    return (int)rb_w32_locale_charmap(enc_find_index);
 }

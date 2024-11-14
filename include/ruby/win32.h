@@ -822,6 +822,9 @@ extern int rb_w32_mprotect(void *, size_t, int);
 #define munmap(a, l) rb_w32_munmap(a, l)
 #define mprotect(a, l, prot) rb_w32_mprotect(a, l, prot)
 
+// c runtime library locale determination
+extern int rb_w32_crt_encindex(void);
+
 #if defined(__cplusplus)
 #if 0
 { /* satisfy cc-mode */

@@ -950,7 +950,17 @@ zone_str(const char *zone)
         str = rb_usascii_str_new(zone, len);
     }
     else {
+#ifndef _WIN32
         str = rb_enc_str_new(zone, len, rb_locale_encoding());
+#else
+        int index = rb_w32_crt_encindex();
+        if (index == rb_utf8_encindex())
+            str = rb_utf8_str_new(zone, len);
+        else
+            str = rb_str_conv_enc_opts(rb_str_new_cstr(zone),
+              rb_enc_from_index(index), rb_utf8_encoding(),
+              ECONV_UNDEF_REPLACE|ECONV_INVALID_REPLACE, Qnil);
+#endif
     }
     return rb_fstring(str);
 }
