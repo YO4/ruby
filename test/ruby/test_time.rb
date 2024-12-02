@@ -736,6 +736,13 @@ class TestTime < Test::Unit::TestCase
     assert_nil(t.getlocal("+02:00").zone)
   end
 
+  def test_zone_utf8_on_win32
+    env = {}
+    env["TZ"]="A€あ"
+    assert_equal("UTF-8", EnvUtil.invoke_ruby([env, '-e', 'print Time.now.zone.encoding'], '', true)[0])
+    assert_equal("A€あ".bytes.to_s, EnvUtil.invoke_ruby([env, '-e', 'print Time.now.zone.bytes'], '', true)[0])
+  end if /mswin.*_140$|mingw-ucrt$/ =~ RUBY_PLATFORM && ENV['OS_VER'] != 'windows-2019' # this test needs ucrt dll build >= 10.0.19041.0
+
   def test_plus_minus
     t2000 = get_t2000
     # assert_raise(RangeError) { t2000 + 10000000000 }

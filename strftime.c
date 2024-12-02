@@ -275,7 +275,12 @@ rb_strftime_with_timespec(VALUE ftime, const char *format, size_t format_len,
 	if (enc &&
 	    (rb_is_usascii_enc(enc) ||
 	     rb_is_ascii8bit_enc(enc) ||
-	     rb_is_locale_enc(enc))) {
+#if !defined(_WIN32)
+	     rb_is_locale_enc(enc)
+#else
+	     enc == rb_utf8_encoding()
+#endif
+	)) {
 		enc = NULL;
 	}
 
@@ -640,7 +645,11 @@ rb_strftime_with_timespec(VALUE ftime, const char *format, size_t format_len,
 			    if (enc) {
 				for (i = 0; i < TBUFSIZE && tp[i]; i++) {
 				    if ((unsigned char)tp[i] > 0x7F) {
+#if !defined(_WIN32)
 					VALUE str = rb_str_conv_enc_opts(rb_str_new_cstr(tp), rb_locale_encoding(), enc, ECONV_UNDEF_REPLACE|ECONV_INVALID_REPLACE, Qnil);
+#else
+					VALUE str = rb_str_conv_enc_opts(rb_str_new_cstr(tp), rb_utf8_encoding(), enc, ECONV_UNDEF_REPLACE|ECONV_INVALID_REPLACE, Qnil);
+#endif
 					i = strlcpy(tbuf, RSTRING_PTR(str), TBUFSIZE);
 					tp = tbuf;
 					break;

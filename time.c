@@ -950,7 +950,11 @@ zone_str(const char *zone)
         str = rb_usascii_str_new(zone, len);
     }
     else {
+#if !defined(_WIN32)
         str = rb_enc_str_new(zone, len, rb_locale_encoding());
+#else
+        str = rb_utf8_str_new(zone, len);
+#endif
     }
     return rb_fstring(str);
 }
@@ -1647,13 +1651,34 @@ localtime_with_gmtoff_zone(const time_t *t, struct tm *result, long *gmtoff, VAL
 #endif
 
         if (zone) {
-#if defined(HAVE_TM_ZONE)
+#if defined(_WIN32)
+#define ZONENAME_UNIT 64
+            char *buf;
+            int len;
+            wchar_t wzone[ZONENAME_UNIT];
+            wchar_t *wbuf = NULL;
+            wchar_t *wresult;
+            if (wcsftime(wzone, sizeof(wzone), L"%Z", &tm)) {
+                wresult = wzone;
+            } else {
+                int wc = ZONENAME_UNIT * 2;
+                wbuf = malloc(wc * sizeof(wchar_t));
+                while (1) {
+                    if (wcsftime(wbuf, wc, L"%Z", &tm)) break;
+                    wc += ZONENAME_UNIT;
+                    wbuf = realloc(wbuf, wc);
+                }
+                wresult = wbuf;
+            }
+            len = WideCharToMultiByte(CP_UTF8, 0, wresult, -1, NULL, 0, NULL, NULL);
+            buf = alloca(len);
+            buf[0] = '\0';
+            WideCharToMultiByte(CP_UTF8, 0, wresult, -1, buf, len, NULL, NULL);
+            if (wbuf) free(wbuf);
+            *zone = zone_str(buf);
+#elif defined(HAVE_TM_ZONE)
             *zone = zone_str(tm.tm_zone);
 #elif defined(HAVE_TZNAME) && defined(HAVE_DAYLIGHT)
-# if defined(RUBY_MSVCRT_VERSION) && RUBY_MSVCRT_VERSION >= 140
-#  define tzname _tzname
-#  define daylight _daylight
-# endif
             /* this needs tzset or localtime, instead of localtime_r */
             *zone = zone_str(tzname[daylight && tm.tm_isdst]);
 #else
