@@ -1495,5 +1495,15 @@ class TestEnv < Test::Unit::TestCase
       ENV[key] = nil
       assert_nil ENV[key]
     end
+
+    def test_keys_encoding
+      bug20958 = '[ruby-core:120277] [Bug #20958]'
+      ENV.clear
+      key = "\u{30c6 30b9 30c8}"
+      ENV[key] = "x"
+      enc = Encoding.default_internal || Encoding::UTF_8
+      assert_equal(enc, ENV.keys.last.encoding, bug20958)
+      assert_equal(key.encode(enc), ENV.keys.last, bug20958)
+    end
   end
 end
