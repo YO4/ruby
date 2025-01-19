@@ -951,6 +951,7 @@ $(CONFIG_H): $(MKFILES) $(srcdir)/win32/Makefile.sub $(win_srcdir)/Makefile.sub
 #define COROUTINE_H "$(COROUTINE_H)"
 #define THREAD_IMPL_H "$(THREAD_IMPL_H)"
 #define THREAD_IMPL_SRC "$(THREAD_IMPL_SRC)"
+#define RB_THREAD_LOCAL_SPECIFIER __declspec(thread)
 #define LOAD_RELATIVE 1
 #define DLEXT ".so"
 !if "$(libdir_basename)" != "lib"

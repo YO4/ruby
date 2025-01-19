@@ -2874,6 +2874,24 @@ AS_IF([test "$THREAD_MODEL" = pthread], [
         [AC_DEFINE_UNQUOTED(RB_THREAD_LOCAL_SPECIFIER, ${rb_cv_tls_specifier})]
     )
 ])
+AS_IF([test "$THREAD_MODEL" = win32], [
+    AC_CACHE_CHECK([for thread-local storage specifier], [rb_cv_tls_specifier],
+        rb_cv_tls_specifier=none
+        RUBY_WERROR_FLAG([
+            for attr in \
+                "__thread" \
+                "__declspec(thread)" \
+                "_Thread_local" \
+                ; do
+                AC_LINK_IFELSE([AC_LANG_PROGRAM([[$attr int conftest;]])],
+                    [rb_cv_tls_specifier=$attr; break])
+            done
+        ])
+    )
+    AS_IF([test x"${rb_cv_tls_specifier}" != xnone],
+        [AC_DEFINE_UNQUOTED(RB_THREAD_LOCAL_SPECIFIER, ${rb_cv_tls_specifier})]
+    )
+])
 
 AS_IF([test x"$ac_cv_header_ucontext_h" = xno], [
     AC_CACHE_CHECK([if signal.h defines ucontext_t], [rb_cv_ucontext_in_signal_h],
