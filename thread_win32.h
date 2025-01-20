@@ -37,7 +37,14 @@ struct rb_thread_sched {
 #ifdef RB_THREAD_LOCAL_SPECIFIER
 NOINLINE(void rb_current_ec_set(struct rb_execution_context_struct *));
 
+#ifdef RUBY_EXPORT
 RUBY_EXTERN RB_THREAD_LOCAL_SPECIFIER struct rb_execution_context_struct *ruby_current_ec;
+#else
+/* MSVC dows not allow combining __declspec(thread) and __declspec(dllimport)
+ * and fail compilation with C2492. Workaround it */
+RUBY_EXTERN struct rb_execution_context_struct **rb_current_ec(void);
+#define ruby_current_ec (*rb_current_ec())
+#endif
 #else
 typedef DWORD native_tls_key_t; // TLS index
 

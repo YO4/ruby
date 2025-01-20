@@ -551,6 +551,9 @@ rb_ractor_t *ruby_single_main_ractor;
 bool ruby_vm_keep_script_lines;
 
 #ifdef RB_THREAD_LOCAL_SPECIFIER
+#ifdef ruby_current_ec
+#undef ruby_current_ec
+#endif
 RB_THREAD_LOCAL_SPECIFIER rb_execution_context_t *ruby_current_ec;
 
 #ifdef RUBY_NT_SERIAL
@@ -570,7 +573,13 @@ rb_current_ec_set(rb_execution_context_t *ec)
     ruby_current_ec = ec;
 }
 
-
+#if defined(_WIN32)
+struct rb_execution_context_struct **
+rb_current_ec(void)
+{
+    return &ruby_current_ec;
+}
+#else
 #if defined(__arm64__) || defined(__aarch64__)
 rb_execution_context_t *
 rb_current_ec(void)
@@ -578,6 +587,7 @@ rb_current_ec(void)
     return ruby_current_ec;
 }
 
+#endif
 #endif
 #else
 native_tls_key_t ruby_current_ec_key;
