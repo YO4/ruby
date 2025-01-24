@@ -406,12 +406,10 @@ AC_SUBST(LD)
 AS_IF([test "$GCC" = yes], [
     linker_flag=-Wl,
     : ${optflags=-O3}
-    gcc_major=`echo =__GNUC__ | $CC -E -xc - | sed '/^=/!d;s///'`
-    gcc_minor=`echo =__GNUC_MINOR__ | $CC -E -xc - | sed '/^=/!d;s///'`
-    test -n "$gcc_major" || gcc_major=0
-    test -n "$gcc_minor" || gcc_minor=0
-    icc_version=`echo =__ICC | $CC -E -xc - | sed '/^=/!d;s///;/^__ICC/d'`
-    test -n "$icc_version" || icc_version=0
+    gcc_major=$((   `echo =__GNUC__        | $CC -E -xc - | sed '/^=/!d;s///'` ))
+    gcc_minor=$((   `echo =__GNUC_MINOR__  | $CC -E -xc - | sed '/^=/!d;s///'` ))
+    clang_major=$(( `echo =__clang_major__ | $CC -E -xc - | sed '/^=/!d;s///'` ))
+    icc_version=$(( `echo =__ICC           | $CC -E -xc - | sed '/^=/!d;s///;/^__ICC/d'` ))
     # RUBY_APPEND_OPTIONS(XCFLAGS, ["-include ruby/config.h" "-include ruby/missing.h"])
 
     AS_IF([test "$gcc_major" -lt 4], [
@@ -505,6 +503,8 @@ AS_CASE(["$target_os"],
     [mingw*], [
 	test "$rb_cv_msvcrt" = "" && unset rb_cv_msvcrt
 	AC_CACHE_CHECK(for mingw32 runtime DLL, rb_cv_msvcrt, [
+	save_CFLAGS="$CFLAGS"
+	CFLAGS="$CFLAGS $orig_cflags"
 	AC_LINK_IFELSE([AC_LANG_PROGRAM([[@%:@include <stdio.h>]],
 		    [[FILE* volatile f = stdin; return 0;]])],
 		    [rb_cv_msvcrt=`$OBJDUMP -p conftest$ac_exeext |
@@ -512,6 +512,7 @@ AS_CASE(["$target_os"],
 				   sed -n '/^[[ 	]]*dll name: \(msvc.*\)\.dll$/{s//\1/p;q;};
 					/^[[ 	]]*dll name: \(ucrtbase\|api-ms-win-crt-.*\)\.dll$/{s//ucrt/p;q;}'`],
 		    [rb_cv_msvcrt=msvcrt])
+	CFLAGS="$save_CFLAGS"
 	test "$rb_cv_msvcrt" = "" && rb_cv_msvcrt=msvcrt])
 	RT_VER=`echo "$rb_cv_msvcrt" | tr -cd [0-9]`
 	test "$RT_VER" = "" && RT_VER=60
@@ -1256,10 +1257,18 @@ main()
 		ac_cv_type_off_t=yes
 		ac_cv_sizeof_off_t=8
 		AS_IF([test "$target_cpu" = x64], [
-		    ac_cv_func___builtin_setjmp=yes
-		    ac_cv_func_round=no
+		    AS_IF([test $clang_major -eq 0], [
+			ac_cv_func___builtin_setjmp=yes
+		    ],[
+			ac_cv_func___builtin_setjmp=no
+		    ])
+		    AS_IF([test $RT_VER -lt 140], [
+			ac_cv_func_round=no
+		    ])
 		])
-		ac_cv_func_tgamma=no
+		AS_IF([test $RT_VER -lt 140], [
+		    ac_cv_func_tgamma=no
+		])
 		AC_CHECK_TYPE([NET_LUID], [], [],
 			      [@%:@include <winsock2.h>
 			       @%:@include <windows.h>

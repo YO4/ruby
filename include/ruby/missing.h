@@ -244,6 +244,7 @@ RUBY_EXTERN void tzset(void);
 RUBY_EXTERN int posix_madvise(void *, size_t, int);
 #endif
 
+#ifndef _WIN32 /* (clang) __declspec(dllimport) conflicts with of win32.h */
 #ifndef HAVE_GETEUID
 RUBY_EXTERN rb_uid_t geteuid(void);
 #endif
@@ -258,6 +259,7 @@ RUBY_EXTERN rb_gid_t getegid(void);
 
 #ifndef HAVE_GETGID
 RUBY_EXTERN rb_gid_t getgid(void);
+#endif
 #endif
 
 #ifndef HAVE_GETLOGIN

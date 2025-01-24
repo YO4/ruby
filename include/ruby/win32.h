@@ -738,7 +738,7 @@ DEPRECATED_BY(rb_w32_ugetcwd, char *rb_w32_getcwd(char *, int));
 DEPRECATED_BY(rb_w32_ugetenv, char *rb_w32_getenv(const char *));
 DEPRECATED_BY(rb_w32_urename, int rb_w32_rename(const char *, const char *));
 DEPRECATED_BY(rb_w32_uopen, int rb_w32_open(const char *, int, ...));
-DEPRECATED_BY(rb_w32_uchown, int chown(const char *, int, int));
+DEPRECATED_BY(rb_w32_uchown, RUBY_EXTERN int chown(const char *, int, int));
 DEPRECATED_BY(rb_w32_ulink, int link(const char *, const char *));
 DEPRECATED_BY(rb_w32_ureadlink, ssize_t readlink(const char *, char *, size_t));
 DEPRECATED_BY(rb_w32_usymlink, int symlink(const char *src, const char *link));
