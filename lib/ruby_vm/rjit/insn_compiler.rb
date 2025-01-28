@@ -5831,16 +5831,18 @@ module RubyVM::RJIT
       asm.cmp(array_len_opnd, required_args)
       asm.jne(counted_exit(side_exit, :send_args_splat_length_not_equal))
 
-      asm.comment('Check last argument is not ruby2keyword hash')
+      if required_args > 0
+        asm.comment('Check last argument is not ruby2keyword hash')
 
-      ary_opnd = :rcx
-      jit_array_ptr(asm, array_reg, ary_opnd) # clobbers array_reg
+        ary_opnd = :rcx
+        jit_array_ptr(asm, array_reg, ary_opnd) # clobbers array_reg
 
-      last_array_value = :rax
-      asm.mov(last_array_value, [ary_opnd, (required_args - 1) * C.VALUE.size])
+        last_array_value = :rax
+        asm.mov(last_array_value, [ary_opnd, (required_args - 1) * C.VALUE.size])
 
-      ruby2_exit = counted_exit(side_exit, :send_args_splat_ruby2_hash);
-      guard_object_is_not_ruby2_keyword_hash(asm, last_array_value, :rcx, ruby2_exit) # clobbers :rax
+        ruby2_exit = counted_exit(side_exit, :send_args_splat_ruby2_hash);
+        guard_object_is_not_ruby2_keyword_hash(asm, last_array_value, :rcx, ruby2_exit) # clobbers :rax
+      end
 
       asm.comment('Push arguments from array')
       array_opnd = ctx.stack_pop(1)
