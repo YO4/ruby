@@ -15,6 +15,7 @@ struct rb_native_thread {
 struct rb_thread_sched_item {};
 struct rb_thread_sched {};
 
+void rb_current_ec_set(struct rb_execution_context_struct *);
 RUBY_EXTERN struct rb_execution_context_struct *ruby_current_ec;
 NOINLINE(struct rb_execution_context_struct *rb_current_ec_noinline(void)); // for assertions
 

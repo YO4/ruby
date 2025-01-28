@@ -54,5 +54,6 @@ native_tls_set(native_tls_key_t key, void *ptr)
 RUBY_SYMBOL_EXPORT_BEGIN
 RUBY_EXTERN native_tls_key_t ruby_current_ec_key;
 RUBY_SYMBOL_EXPORT_END
+#define rb_current_ec_set(ec) native_tls_set(ruby_current_ec_key, (ec));
 
 #endif /* RUBY_THREAD_WIN32_H */
