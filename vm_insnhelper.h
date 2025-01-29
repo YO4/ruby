@@ -20,7 +20,13 @@ RUBY_EXTERN rb_serial_t ruby_vm_global_cvar_state;
 // Increment vm_insns_count for --yjit-stats. We increment this even when
 // --yjit or --yjit-stats is not used because branching to skip it is slower.
 // We also don't use ATOMIC_INC for performance, allowing inaccuracy on Ractors.
+#ifdef RB_THREAD_LOCAL_SPECIFIER
 #define JIT_COLLECT_USAGE_INSN(insn) rb_vm_insns_count++
+#else
+#define JIT_COLLECT_USAGE_INSN(insn) \
+            native_tls_set(rb_vm_insns_count_key, \
+                           (void*)(rb_vm_insns_count_get() + 1))
+#endif
 #else
 #define JIT_COLLECT_USAGE_INSN(insn) // none
 #endif

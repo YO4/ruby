@@ -48,6 +48,7 @@ module RubyVM::RJIT
     def initialize
       mem_size = C.rjit_opts.exec_mem_size * 1024 * 1024
       mem_block = C.mmap(mem_size)
+#pp [:mem_block, mem_block.to_s(16)]
       @cb = CodeBlock.new(mem_block: mem_block, mem_size: mem_size / 2)
       @ocb = CodeBlock.new(mem_block: mem_block + mem_size / 2, mem_size: mem_size / 2, outlined: true)
       @exit_compiler = ExitCompiler.new
@@ -242,9 +243,12 @@ module RubyVM::RJIT
       asm.push(EC)
       asm.push(SP)
 
+      # Allocate shadow store for calling Win64 ABI functions
+      asm.sub(:rsp, RSP_ALLOC_SIZE)
+
       # Move arguments EC and CFP to dedicated registers
-      asm.mov(EC, :rdi)
-      asm.mov(CFP, :rsi)
+      asm.mov(EC, C_ARGS[0])
+      asm.mov(CFP, C_ARGS[1])
 
       # Load sp to a dedicated register
       asm.mov(SP, [CFP, C.rb_control_frame_t.offsetof(:sp)]) # rbx = cfp->sp
@@ -510,7 +514,7 @@ module RubyVM::RJIT
 
     def supported_platform?
       return @supported_platform if defined?(@supported_platform)
-      @supported_platform = RUBY_PLATFORM.match?(/x86_64/).tap do |supported|
+      @supported_platform = RUBY_PLATFORM.match?(/x86_64|x64-/).tap do |supported|
         warn "warning: RJIT does not support #{RUBY_PLATFORM} yet" unless supported
       end
     end

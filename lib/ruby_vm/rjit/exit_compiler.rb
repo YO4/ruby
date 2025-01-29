@@ -12,6 +12,9 @@ module RubyVM::RJIT
       # Increment per-insn exit counter
       count_insn_exit(pc, asm)
 
+      # Dellocate shadow store for calling Win64 ABI functions
+      asm.add(:rsp, RSP_ALLOC_SIZE)
+
       # Restore callee-saved registers
       asm.comment("#{cause}: entry exit")
       asm.pop(SP)
@@ -26,6 +29,9 @@ module RubyVM::RJIT
     # @param asm [RubyVM::RJIT::Assembler]
     def compile_leave_exit(asm)
       asm.comment('default cfp->jit_return')
+
+      # Dellocate shadow store for calling Win64 ABI functions
+      asm.add(:rsp, RSP_ALLOC_SIZE)
 
       # Restore callee-saved registers
       asm.pop(SP)
@@ -49,6 +55,9 @@ module RubyVM::RJIT
 
       # TODO: count the exit
 
+      # Dellocate shadow store for calling Win64 ABI functions
+      asm.add(:rsp, RSP_ALLOC_SIZE)
+
       # Restore callee-saved registers
       asm.pop(SP)
       asm.pop(EC)
@@ -67,6 +76,9 @@ module RubyVM::RJIT
 
       # Increment per-insn exit counter
       count_insn_exit(pc, asm)
+
+      # Dellocate shadow store for calling Win64 ABI functions
+      asm.add(:rsp, RSP_ALLOC_SIZE)
 
       # Restore callee-saved registers
       asm.comment("exit to interpreter on #{pc_to_insn(pc).name}")
@@ -100,9 +112,9 @@ module RubyVM::RJIT
       if C.rjit_opts.dump_disasm && C.imemo_type_p(iseq, C.imemo_iseq) # Guard against ISEQ GC at random moments
         asm.comment("branch stub hit: #{iseq.body.location.label}@#{C.rb_iseq_path(iseq)}:#{iseq_lineno(iseq, target0_p ? branch_stub.target0.pc : branch_stub.target1.pc)}")
       end
-      asm.mov(:rdi, to_value(branch_stub))
-      asm.mov(:esi, ctx.sp_offset)
-      asm.mov(:edx, target0_p ? 1 : 0)
+      asm.mov(C_ARGS[0], to_value(branch_stub))
+      asm.mov(C_ARGS32[1], ctx.sp_offset)
+      asm.mov(C_ARGS32[2], target0_p ? 1 : 0)
       asm.call(C.rb_rjit_branch_stub_hit)
 
       # Jump to the address returned by rb_rjit_branch_stub_hit

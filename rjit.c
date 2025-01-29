@@ -40,9 +40,11 @@
 #include "internal/compile.h"
 #include "internal/gc.h"
 
-#include <sys/wait.h>
+#ifdef HAVE_SYS_WAIT_H
+# include <sys/wait.h>
+#endif
 #include <sys/time.h>
-#include <dlfcn.h>
+//#include <dlfcn.h>
 #include <errno.h>
 #ifdef HAVE_FCNTL_H
 #include <fcntl.h>
@@ -170,7 +172,6 @@ struct rb_rjit_runtime_counters rb_rjit_counters = { 0 };
 
 extern VALUE rb_gc_enable(void);
 extern VALUE rb_gc_disable(void);
-extern RB_THREAD_LOCAL_SPECIFIER uint64_t rb_vm_insns_count;
 
 // Disable GC, TracePoint, JIT, stats, and $!
 #define WITH_RJIT_ISOLATED_USING_PC(using_pc, stmt) do { \
@@ -190,7 +191,7 @@ extern RB_THREAD_LOCAL_SPECIFIER uint64_t rb_vm_insns_count;
     rb_rjit_call_p = false; \
     \
     rjit_stats_p = false; \
-    uint64_t insns_count = rb_vm_insns_count; \
+    uint64_t insns_count = rb_vm_insns_count_get(); \
     \
     VALUE err = rb_errinfo(); \
     \
@@ -198,7 +199,7 @@ extern RB_THREAD_LOCAL_SPECIFIER uint64_t rb_vm_insns_count;
     \
     rb_set_errinfo(err); \
     \
-    rb_vm_insns_count = insns_count; \
+    rb_vm_insns_count_set(insns_count); \
     rjit_stats_p = rb_rjit_opts.stats; \
     \
     rb_rjit_call_p = (rjit_cancel_p ? false : original_call_p); \

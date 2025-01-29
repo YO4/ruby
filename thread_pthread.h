@@ -162,6 +162,7 @@ native_tls_set(native_tls_key_t key, void *ptr)
 }
 
 RUBY_EXTERN native_tls_key_t ruby_current_ec_key;
+#define rb_current_ec_set(ec) native_tls_set(ruby_current_ec_key, (ec))
 #endif
 
 #endif /* RUBY_THREAD_PTHREAD_H */

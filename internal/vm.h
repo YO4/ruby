@@ -79,9 +79,18 @@ void rb_check_stack_overflow(void);
 VALUE rb_block_call2(VALUE obj, ID mid, int argc, const VALUE *argv, rb_block_call_func_t bl_proc, VALUE data2, long flags);
 struct vm_ifunc *rb_current_ifunc(void);
 
-#if USE_YJIT
+#if USE_YJIT | USE_RJIT
 /* vm_exec.c */
+#ifdef RB_THREAD_LOCAL_SPECIFIER
 extern RB_THREAD_LOCAL_SPECIFIER uint64_t rb_vm_insns_count;
+#define rb_vm_insns_count_get() rb_vm_insns_count
+#define rb_vm_insns_count_set(count) rb_vm_insns_count = (count)
+#else
+#define rb_vm_insns_count_get() \
+            (uint64_t)native_tls_get(rb_vm_insns_count_key)
+#define rb_vm_insns_count_set(count) \
+            native_tls_set(rb_vm_insns_count_key, (void*)(count))
+#endif
 #endif
 
 extern bool rb_free_at_exit;

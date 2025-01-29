@@ -12,6 +12,9 @@ end
 # Help ffi-clang find libclang
 # Hint: apt install libclang1
 ENV['LIBCLANG'] ||= Dir.glob("/usr/lib/llvm-*/lib/libclang.so.1").grep_v(/-cpp/).sort.last
+#ENV['LIBCLANG'] ||= Dir.glob("c:/msys64/clang64/bin/libclang.dll").sort.last
+ENV['LIBCLANG'] ||= Dir.glob("c:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin/libclang.dll").sort.last
+pp ENV['LIBCLANG']
 require 'ffi/clang'
 
 require 'etc'
@@ -217,7 +220,7 @@ class BindingGenerator
 
   # Return code before BINDGEN_BEG and code after BINDGEN_END
   def split_ambles(src_path)
-    lines = File.read(src_path).lines
+    lines = File.binread(src_path).lines
 
     preamble_end = lines.index { |l| l.include?(BINDGEN_BEG) }
     raise "`#{BINDGEN_BEG}` was not found in '#{src_path}'" if preamble_end.nil?
@@ -265,6 +268,7 @@ class BindingGenerator
           buf << field_builder.call(spelling, "CType::BitField.new(#{bitwidth}, #{node.offsetof.fetch(spelling) % 8})")
         # "(unnamed ...)" struct and union are handled here, which are also struct-specific.
         in Node[kind: :field_decl, spelling:, type:, children: [grandchild]] if type.match?(/\((unnamed|anonymous) [^)]+\)\z/)
+grandchild.spelling = ""
           if sizeof_type
             child_type = "#{sizeof_type}.#{child.spelling}"
           else
@@ -502,7 +506,6 @@ generator = BindingGenerator.new(
       rb_cTrueClass
       rb_rjit_global_events
       rb_mRubyVMFrozenCore
-      rb_vm_insns_count
       idRespond_to_missing
     ],
   },
@@ -638,9 +641,13 @@ generator = BindingGenerator.new(
   ],
   skip_fields: {
     'rb_execution_context_struct.machine': %w[regs], # differs between macOS and Linux
-    rb_execution_context_struct: %w[method_missing_reason], # non-leading bit fields not supported
+    rb_execution_context_struct: %w[
+      method_missing_reason, # non-leading bit fields not supported
+      checked_clock # windows specific
+    ].
     rb_iseq_constant_body: %w[jit_exception jit_exception_calls yjit_payload yjit_calls_at_interv], # conditionally defined
     rb_thread_struct: %w[status has_dedicated_nt to_kill abort_on_exception report_on_exception pending_interrupt_queue_checked],
+    rb_proc_t: %w[is_from_method is_lambda is_isolated],
     :'' => %w[is_from_method is_lambda is_isolated], # rb_proc_t
   },
   ruby_fields: {
@@ -663,4 +670,4 @@ generator = BindingGenerator.new(
 generator.generate(nodes)
 
 # Write rjit_c.rb
-File.write(src_path, generator.src)
+File.binwrite(src_path, generator.src)

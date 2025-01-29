@@ -189,6 +189,12 @@ Init_native_thread(rb_thread_t *main_th)
     if ((ruby_native_thread_key = TlsAlloc()) == TLS_OUT_OF_INDEXES) {
         rb_bug("TlsAlloc() for ruby_native_thread_key fails");
     }
+#if USE_RJIT
+    if ((rb_vm_insns_count_key = TlsAlloc()) == TLS_OUT_OF_INDEXES) {
+        rb_bug("TlsAlloc() for rb_vm_insns_count_key fails");
+    }
+    native_tls_set(rb_vm_insns_count_key, 0);
+#endif
 
     // setup main thread
 

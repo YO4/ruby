@@ -302,6 +302,7 @@ extern int rb_w32_ulink(const char *, const char *);
 extern ssize_t rb_w32_ureadlink(const char *, char *, size_t);
 extern int rb_w32_usymlink(const char *src, const char *link);
 extern int gettimeofday(struct timeval *, struct timezone *);
+#define _GETTIMEOFDAY_DEFINED
 extern int clock_gettime(clockid_t, struct timespec *);
 extern int clock_getres(clockid_t, struct timespec *);
 extern rb_pid_t waitpid(rb_pid_t, int *, int);

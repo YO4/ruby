@@ -474,11 +474,11 @@ module RubyVM::RJIT
         val_opnd = ctx.stack_pop(1)
 
         # Call rb_vm_setinstancevariable(iseq, obj, id, val, ic);
-        asm.mov(:rdi, jit.iseq.to_i)
-        asm.mov(:rsi, [CFP, C.rb_control_frame_t.offsetof(:self)])
-        asm.mov(:rdx, ivar_name)
-        asm.mov(:rcx, val_opnd)
-        asm.mov(:r8, ic)
+        asm.mov(C_ARGS[0], jit.iseq.to_i)
+        asm.mov(C_ARGS[1], [CFP, C.rb_control_frame_t.offsetof(:self)])
+        asm.mov(C_ARGS[2], ivar_name)
+        asm.mov(C_ARGS[3], val_opnd)
+        asm.mov(C_ARGS[4], ic)
         asm.call(C.rb_vm_setinstancevariable)
       else
         # Get the iv index
@@ -871,8 +871,9 @@ module RubyVM::RJIT
       asm.call(C.rb_ary_tmp_new_from_values)
 
       # Save the array so we can clear it later
-      asm.push(C_RET)
-      asm.push(C_RET) # Alignment
+      # asm.push(C_RET)
+      # asm.push(C_RET) # Alignment
+      asm.mov([:rsp, SHADOW_STORE_OFFSET], C_RET)
 
       asm.mov(C_ARGS[0], C_RET)
       asm.mov(C_ARGS[1], opt)
@@ -880,8 +881,9 @@ module RubyVM::RJIT
 
       # The actual regex is in RAX now.  Pop the temp array from
       # rb_ary_tmp_new_from_values into C arg regs so we can clear it
-      asm.pop(:rcx) # Alignment
-      asm.pop(:rcx) # ary
+      # asm.pop(:rcx) # Alignment
+      # asm.pop(:rcx) # ary
+      asm.mov(:rcx, [:rsp, SHADOW_STORE_OFFSET])
 
       # The value we want to push on the stack is in RAX right now
       stack_ret = ctx.stack_push(Type::UnknownHeap)
@@ -1107,20 +1109,22 @@ module RubyVM::RJIT
         asm.call(C.rb_hash_new_with_size)
 
         # Save the allocated hash as we want to push it after insertion
-        asm.push(C_RET)
-        asm.push(C_RET) # x86 alignment
+        # asm.push(C_RET)
+        # asm.push(C_RET) # x86 alignment
+        asm.mov([:rsp, SHADOW_STORE_OFFSET], C_RET)
 
         # Get a pointer to the values to insert into the hash
-        asm.lea(:rcx, ctx.stack_opnd(num - 1))
+        asm.lea(C_ARGS[1], ctx.stack_opnd(num - 1))
 
         # rb_hash_bulk_insert(num, STACK_ADDR_FROM_TOP(num), val);
         asm.mov(C_ARGS[0], num)
-        asm.mov(C_ARGS[1], :rcx)
+        # asm.mov(C_ARGS[1], :rcx)
         asm.mov(C_ARGS[2], C_RET)
         asm.call(C.rb_hash_bulk_insert)
 
-        asm.pop(:rax)
-        asm.pop(:rax)
+        # asm.pop(:rax)
+        # asm.pop(:rax)
+        asm.mov(:rax, [:rsp, SHADOW_STORE_OFFSET])
 
         ctx.stack_pop(num)
         stack_ret = ctx.stack_push(Type::Hash)
@@ -1845,8 +1849,8 @@ module RubyVM::RJIT
         asm.comment('call ifunc')
         asm.and(:rcx, ~0x3) # captured_opnd
         asm.lea(:rax, ctx.sp_opnd(-calling.argc * C.VALUE.size)) # argv
-        asm.mov(C_ARGS[0], EC)
         asm.mov(C_ARGS[1], :rcx) # captured_opnd
+        asm.mov(C_ARGS[0], EC)
         asm.mov(C_ARGS[2], calling.argc)
         asm.mov(C_ARGS[3], :rax) # argv
         asm.call(C.rb_vm_yield_with_cfunc)
@@ -1913,11 +1917,15 @@ module RubyVM::RJIT
       # rb_vm_throw verifies it's a valid throw, sets ec->tag->state, and returns throw
       # data, which is throwobj or a vm_throw_data wrapping it. When ec->tag->state is
       # set, JIT code callers will handle the throw with vm_exec_handle_exception.
+      asm.mov(C_ARGS[3], :rcx)
       asm.mov(C_ARGS[0], EC)
       asm.mov(C_ARGS[1], CFP)
       asm.mov(C_ARGS[2], throw_state)
       # asm.mov(C_ARGS[3], :rcx) # same reg
       asm.call(C.rb_vm_throw)
+
+      # Dellocate shadow store for calling Win64 ABI functions
+      asm.add(:rsp, RSP_ALLOC_SIZE)
 
       asm.comment('exit from throw')
       asm.pop(SP)
@@ -2526,8 +2534,8 @@ module RubyVM::RJIT
         asm.comment('call rb_hash_aref')
         key_opnd = ctx.stack_opnd(0)
         recv_opnd = ctx.stack_opnd(1)
-        asm.mov(:rdi, recv_opnd)
-        asm.mov(:rsi, key_opnd)
+        asm.mov(C_ARGS[0], recv_opnd)
+        asm.mov(C_ARGS[1], key_opnd)
         asm.call(C.rb_hash_aref)
 
         # Pop the key and the receiver
@@ -4737,15 +4745,15 @@ module RubyVM::RJIT
             diff = (non_rest_arg_count - required_num)
 
             # diff is >0 so no need to worry about null pointer
-            asm.comment('load pointer to array elements')
+            asm.comment('load pointer to array elements(1)')
             offset_magnitude = C.VALUE.size * diff
             values_opnd = ctx.sp_opnd(-offset_magnitude)
             values_ptr = :rcx
             asm.lea(values_ptr, values_opnd)
 
             asm.comment('prepend stack values to rest array')
-            asm.mov(C_ARGS[0], diff)
             asm.mov(C_ARGS[1], values_ptr)
+            asm.mov(C_ARGS[0], diff)
             asm.mov(C_ARGS[2], array)
             asm.call(C.rb_ary_unshift_m)
             ctx.stack_pop(diff)
@@ -4786,10 +4794,10 @@ module RubyVM::RJIT
           if n == 0
             values_ptr = 0
           else
-            asm.comment('load pointer to array elements')
+            asm.comment('load pointer to array elements(2)')
             offset_magnitude = C.VALUE.size * n
             values_opnd = ctx.sp_opnd(-offset_magnitude)
-            values_ptr = :rcx
+            values_ptr = C_ARGS[3]
             asm.lea(values_ptr, values_opnd)
           end
 
@@ -5471,7 +5479,7 @@ module RubyVM::RJIT
 
       # About to reset the SP, need to load this here
       recv_idx = argc # blockarg is not supported. send_shift is already handled.
-      asm.mov(:rcx, ctx.stack_opnd(recv_idx)) # recv
+      asm.mov(C_ARGS[3], ctx.stack_opnd(recv_idx)) # recv
 
       # Save the PC and SP because the callee can make Ruby calls
       jit_prepare_routine_call(jit, ctx, asm) # NOTE: clobbers rax
@@ -5480,7 +5488,7 @@ module RubyVM::RJIT
 
       kw_splat = flags & C::VM_CALL_KW_SPLAT
 
-      asm.mov(C_ARGS[0], :rcx)
+      asm.mov(C_ARGS[0], C_ARGS[3])
       asm.mov(C_ARGS[1], EC)
       asm.mov(C_ARGS[2], argc)
       asm.lea(C_ARGS[3], [:rax, -argc * C.VALUE.size]) # stack_argument_pointer. NOTE: C_ARGS[3] is rcx
@@ -5831,6 +5839,8 @@ module RubyVM::RJIT
       asm.cmp(array_len_opnd, required_args)
       asm.jne(counted_exit(side_exit, :send_args_splat_length_not_equal))
 
+unless (required_args == 0)
+
       asm.comment('Check last argument is not ruby2keyword hash')
 
       ary_opnd = :rcx
@@ -5841,7 +5851,7 @@ module RubyVM::RJIT
 
       ruby2_exit = counted_exit(side_exit, :send_args_splat_ruby2_hash);
       guard_object_is_not_ruby2_keyword_hash(asm, last_array_value, :rcx, ruby2_exit) # clobbers :rax
-
+end
       asm.comment('Push arguments from array')
       array_opnd = ctx.stack_pop(1)
 

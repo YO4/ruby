@@ -9,9 +9,16 @@ module RubyVM::RJIT
   # 64-bit memory access
   QwordPtr = Array
 
-  # SystemV x64 calling convention
-  C_ARGS = [:rdi, :rsi, :rdx, :rcx, :r8, :r9]
+  # Win64 stack allocation size
+  RSP_ALLOC_SIZE = 48 # 6 args shadow store
+  SHADOW_STORE_OFFSET = RSP_ALLOC_SIZE + 24 + 8
+
+  # Win64 x86_64 calling convention
+  C_ARGS = [:rcx, :rdx, :r8, :r9, [:rsp, 32], [:rsp, 40]]
+  C_ARGS32 = [:ecx, :edx, :r8d, :r9d] # for compile_branch_stub()
   C_RET  = :rax
+
+  MOV_SCRATCH = :r10
 
   # https://cdrdv2.intel.com/v1/dl/getContent/671110
   # Mostly an x86_64 assembler, but this also has some stuff that is useful for any architecture.
@@ -686,6 +693,9 @@ module RubyVM::RJIT
             mod_rm: ModRM[mod: Mod01, reg: src_reg, rm: dst_reg],
             disp: dst_disp,
           )
+        else
+          mov(MOV_SCRATCH, src)
+          mov(dst, MOV_SCRATCH)
         end
       in QwordPtr[R64 => dst_reg, IMM32 => dst_disp]
         case src
@@ -964,12 +974,12 @@ module RubyVM::RJIT
       end
       @bytes.push(*Array(opcode))
       if mod_rm
-        mod_rm_byte = encode_mod_rm(
+        mod_rm_sib = encode_mod_rm(
           mod: mod_rm.mod,
           reg: mod_rm.reg.is_a?(Symbol) ? reg_code(mod_rm.reg) : mod_rm.reg,
           rm: mod_rm.rm.is_a?(Symbol) ? reg_code(mod_rm.rm) : mod_rm.rm,
         )
-        @bytes.push(mod_rm_byte)
+        @bytes.push(*mod_rm_sib)
       end
       if disp
         @bytes.push(*Array(disp))
@@ -1006,7 +1016,9 @@ module RubyVM::RJIT
       if rm > 0b111
         raise ArgumentError, "too large R/M: #{rm}"
       end
-      (mod << 6) + (reg << 3) + rm
+      mod_rm_byte = (mod << 6) + (reg << 3) + rm
+      # put SIB when ModR/M is [rsp + disp] or [r12 + disp]
+      (rm == 0b100 && mod != 0b11) ? [mod_rm_byte, 0x24] : mod_rm_byte
     end
 
     # ib: 1 byte

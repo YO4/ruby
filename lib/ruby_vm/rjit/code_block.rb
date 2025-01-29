@@ -13,6 +13,7 @@ module RubyVM::RJIT
 
     # @param asm [RubyVM::RJIT::Assembler]
     def write(asm)
+#pp [asm.comments, caller(1)[0,3]]
       return 0 if @write_pos + asm.size >= @mem_size
 
       start_addr = write_addr

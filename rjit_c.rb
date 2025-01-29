@@ -330,6 +330,10 @@ module RubyVM::RJIT # :nodoc: all
     def RCLASS_SINGLETON_P(klass)
       Primitive.cexpr! 'RCLASS_SINGLETON_P(klass)'
     end
+
+    def rjit_vm_insns_count()
+      Primitive.cexpr! 'SIZET2NUM((size_t)rjit_vm_insns_count())'
+    end
   end
 
   #
@@ -470,7 +474,6 @@ module RubyVM::RJIT # :nodoc: all
   def C.rb_cTrueClass = Primitive.cexpr!(%q{ SIZET2NUM(rb_cTrueClass) })
   def C.rb_mRubyVMFrozenCore = Primitive.cexpr!(%q{ SIZET2NUM(rb_mRubyVMFrozenCore) })
   def C.rb_rjit_global_events = Primitive.cexpr!(%q{ SIZET2NUM(rb_rjit_global_events) })
-  def C.rb_vm_insns_count = Primitive.cexpr!(%q{ SIZET2NUM(rb_vm_insns_count) })
 
   def C.rb_ary_clear
     Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_ary_clear) }
@@ -757,7 +760,7 @@ module RubyVM::RJIT # :nodoc: all
   end
 
   def C.ID
-    @ID ||= CType::Immediate.parse("unsigned long")
+    @ID ||= CType::Immediate.parse("unsigned long long")
   end
 
   def C.IVC
@@ -1285,7 +1288,7 @@ module RubyVM::RJIT # :nodoc: all
 
   def C.rb_proc_t
     @rb_proc_t ||= CType::Struct.new(
-      "", Primitive.cexpr!("SIZEOF(rb_proc_t)"),
+      "rb_proc_t", Primitive.cexpr!("SIZEOF(rb_proc_t)"),
       block: [self.rb_block, Primitive.cexpr!("OFFSETOF((*((rb_proc_t *)NULL)), block)")],
     )
   end

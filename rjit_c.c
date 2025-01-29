@@ -32,6 +32,8 @@
 #ifndef _WIN32
 #include <unistd.h>
 #include <sys/mman.h>
+#else
+#define PROT_NONE 0
 #endif
 
 #include <errno.h>
@@ -60,7 +62,6 @@ align_ptr(uint8_t *ptr, uint32_t multiple)
 static uint8_t *
 rjit_reserve_addr_space(uint32_t mem_size)
 {
-#ifndef _WIN32
     uint8_t *mem_block;
 
     // On Linux
@@ -92,6 +93,21 @@ rjit_reserve_addr_space(uint32_t mem_size)
             // +4MB
             req_addr += 4 * 1024 * 1024;
         } while (req_addr < probe_region_end);
+
+    // Windows
+    #elif defined(_WIN32)
+        // ruby interpreter can be mapped at last of VA, so allocate trailing address will be failed.
+        uint8_t *const cfunc_sample_addr = (void *)(uintptr_t)&rjit_reserve_addr_space;
+        uintptr_t offset = 0x60000000;
+        uint8_t *req_addr = ((uintptr_t)cfunc_sample_addr > offset) ? (cfunc_sample_addr - offset) : cfunc_sample_addr;
+        mem_block = mmap(
+            req_addr,
+            mem_size,
+            PROT_NONE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0
+        );
 
     // On MacOS and other platforms
     #else
@@ -134,10 +150,6 @@ rjit_reserve_addr_space(uint32_t mem_size)
     }
 
     return mem_block;
-#else
-    // Windows not supported for now
-    return NULL;
-#endif
 }
 
 static VALUE
@@ -469,7 +481,7 @@ dump_disasm(rb_execution_context_t *ec, VALUE self, VALUE from, VALUE to, VALUE 
     size_t base_addr = RTEST(test) ? 0 : from_addr; // On tests, start from 0 for output stability.
     size_t count = cs_disasm(handle, (const uint8_t *)from_addr, to_addr - from_addr, base_addr, 0, &insns);
     for (size_t i = 0; i < count; i++) {
-        VALUE vals = rb_ary_new_from_args(3, LONG2NUM(insns[i].address), rb_str_new2(insns[i].mnemonic), rb_str_new2(insns[i].op_str));
+        VALUE vals = rb_ary_new_from_args(3, SIZET2NUM(insns[i].address), rb_str_new2(insns[i].mnemonic), rb_str_new2(insns[i].op_str));
         rb_ary_push(result, vals);
     }
 
@@ -513,6 +525,15 @@ rjit_for_each_iseq(rb_execution_context_t *ec, VALUE self, VALUE block)
     rb_objspace_each_objects(for_each_iseq_i, (void *)block);
     return Qnil;
 }
+
+static uint64_t
+rjit_vm_insns_count(void) {
+    return rb_vm_insns_count_get();
+}
+
+#ifndef RB_THREAD_LOCAL_SPECIFIER
+#define RB_THREAD_LOCAL_SPECIFIER
+#endif
 
 // bindgen references
 extern ID rb_get_symbol_id(VALUE name);
