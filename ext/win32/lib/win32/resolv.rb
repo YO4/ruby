@@ -100,8 +100,8 @@ module Win32
                 end
               else
                 cmd = "Get-ChildItem 'HKLM:\\#{TCPIP_NT}\\Interfaces' | ForEach-Object { $_.PSChildName }"
-                output, _ = Open3.capture2('powershell', '-Command', cmd)
-                output.split(/\n+/)
+                output, result = Open3.capture2('powershell', '-Command', cmd)
+                result.success? ? output.split(/\n+/) : ""
               end
 
         ifs.each do |iface|
@@ -135,8 +135,8 @@ module Win32
           end
         else
           cmd = "Get-ItemProperty -Path 'HKLM:\\#{path}' -Name '#{name}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty '#{name}'"
-          output, _ = Open3.capture2('powershell', '-Command', cmd)
-          output.strip
+          output, result = Open3.capture2('powershell', '-Command', cmd)
+          result.success? ? output.strip : ""
         end
       end
     end
