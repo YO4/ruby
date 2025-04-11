@@ -99,7 +99,7 @@ module Win32
                   []
                 end
               else
-                cmd = "Get-ChildItem 'HKLM:\\#{TCPIP_NT}\\Interfaces' | ForEach-Object { $_.PSChildName }"
+                cmd = "$ProgressPreference = 'SilentlyContinue'; Get-ChildItem 'HKLM:\\#{TCPIP_NT}\\Interfaces' | ForEach-Object { $_.PSChildName }"
                 output, result = Open3.capture2('powershell', '-Command', cmd)
                 result.success? ? output.split(/\n+/) : ""
               end
@@ -134,7 +134,7 @@ module Win32
             ""
           end
         else
-          cmd = "Get-ItemProperty -Path 'HKLM:\\#{path}' -Name '#{name}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty '#{name}'"
+          cmd = "$ProgressPreference = 'SilentlyContinue'; Get-ItemProperty -Path 'HKLM:\\#{path}' -Name '#{name}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty '#{name}'"
           output, result = Open3.capture2('powershell', '-Command', cmd)
           output = result.success? ? output.strip : ""
           dword ? output.to_i : output
