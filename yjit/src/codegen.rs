@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ffi::CStr;
 use std::mem;
-use std::os::raw::c_int;
+use std::os::raw::{c_int, c_long};
 use std::ptr;
 use std::rc::Rc;
 use std::cell::RefCell;
@@ -8847,7 +8847,7 @@ fn gen_struct_aref(
 
     // Confidence checks
     assert!(unsafe { RB_TYPE_P(comptime_recv, RUBY_T_STRUCT) });
-    assert!((off as i64) < unsafe { RSTRUCT_LEN(comptime_recv) });
+    assert!((off as c_long) < unsafe { RSTRUCT_LEN(comptime_recv) });
 
     // We are going to use an encoding that takes a 4-byte immediate which
     // limits the offset to INT32_MAX.
@@ -8925,7 +8925,7 @@ fn gen_struct_aset(
 
     // Confidence checks
     assert!(unsafe { RB_TYPE_P(comptime_recv, RUBY_T_STRUCT) });
-    assert!((off as i64) < unsafe { RSTRUCT_LEN(comptime_recv) });
+    assert!((off as c_long) < unsafe { RSTRUCT_LEN(comptime_recv) });
 
     asm_comment!(asm, "struct aset");
 

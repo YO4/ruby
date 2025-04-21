@@ -85,7 +85,7 @@
 use std::convert::From;
 use std::ffi::{CString, CStr};
 use std::fmt::{Debug, Formatter};
-use std::os::raw::{c_char, c_int, c_uint};
+use std::os::raw::{c_char, c_int, c_uint, c_long};
 use std::panic::{catch_unwind, UnwindSafe};
 
 // We check that we can do this with the configure script and a couple of
@@ -608,7 +608,7 @@ impl From<VALUE> for u16 {
 
 /// Produce a Ruby string from a Rust string slice
 pub fn rust_str_to_ruby(str: &str) -> VALUE {
-    unsafe { rb_utf8_str_new(str.as_ptr() as *const _, str.len() as i64) }
+    unsafe { rb_utf8_str_new(str.as_ptr() as *const _, str.len() as c_long) }
 }
 
 /// Produce a Ruby symbol from a Rust string slice

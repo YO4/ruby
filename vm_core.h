@@ -1023,12 +1023,13 @@ struct rb_execution_context_struct {
     /* interrupt flags */
     rb_atomic_t interrupt_flag;
     rb_atomic_t interrupt_mask; /* size should match flag */
-#if defined(USE_VM_CLOCK) && USE_VM_CLOCK
-    uint32_t checked_clock;
-#endif
 
     rb_fiber_t *fiber_ptr;
     struct rb_thread_struct *thread_ptr;
+
+#if defined(USE_VM_CLOCK) && USE_VM_CLOCK
+    uint32_t checked_clock;
+#endif
 
     /* storage (ec (fiber) local) */
     struct rb_id_table *local_storage;

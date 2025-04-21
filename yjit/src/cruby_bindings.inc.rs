@@ -172,7 +172,10 @@ pub const VM_ENV_DATA_INDEX_FLAGS: u32 = 0;
 pub const VM_BLOCK_HANDLER_NONE: u32 = 0;
 pub const SHAPE_ID_NUM_BITS: u32 = 32;
 pub const OBJ_TOO_COMPLEX_SHAPE_ID: u32 = 2;
+#[cfg(not(windows))]
 pub type ID = ::std::os::raw::c_ulong;
+#[cfg(windows)]
+pub type ID = ::std::os::raw::c_ulonglong;
 pub type rb_alloc_func_t = ::std::option::Option<unsafe extern "C" fn(klass: VALUE) -> VALUE>;
 pub const RUBY_Qfalse: ruby_special_consts = 0;
 pub const RUBY_Qnil: ruby_special_consts = 4;
@@ -257,7 +260,10 @@ pub type ruby_fl_type = i32;
 pub const RSTRING_NOEMBED: ruby_rstring_flags = 8192;
 pub const RSTRING_FSTR: ruby_rstring_flags = 536870912;
 pub type ruby_rstring_flags = u32;
+#[cfg(not(windows))]
 pub type st_data_t = ::std::os::raw::c_ulong;
+#[cfg(windows)]
+pub type st_data_t = ::std::os::raw::c_ulonglong;
 pub type st_index_t = st_data_t;
 pub const ST_CONTINUE: st_retval = 0;
 pub const ST_STOP: st_retval = 1;
