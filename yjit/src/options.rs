@@ -2,6 +2,12 @@ use std::{ffi::{CStr, CString}, ptr::null, fs::File};
 use crate::{backend::current::TEMP_REGS, cruby::*, stats::Counter};
 use std::os::raw::{c_char, c_int, c_uint};
 
+#[cfg(not(windows))]
+use std::os::unix::io::RawFd as RawFd;
+
+#[cfg(windows)]
+use std::os::windows::prelude::RawHandle as RawFd;
+
 // Call threshold for small deployments and command-line apps
 pub static SMALL_CALL_THRESHOLD: u64 = 30;
 
@@ -140,7 +146,7 @@ pub enum TraceExits {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LogOutput {
     // Dump to the log file as events occur.
-    File(std::os::unix::io::RawFd),
+    File(RawFd),
     // Keep the log in memory only
     MemoryOnly,
     // Dump to stderr when the process exits
@@ -152,7 +158,7 @@ pub enum DumpDisasm {
     // Dump to stdout
     Stdout,
     // Dump to "yjit_{pid}.log" file under the specified directory
-    File(std::os::unix::io::RawFd),
+    File(RawFd),
 }
 
 /// Type of symbols to dump into /tmp/perf-{pid}.map
@@ -304,9 +310,8 @@ pub fn parse_option(str_ptr: *const std::os::raw::c_char) -> Option<()> {
                     let path = format!("{directory}/yjit_{}.log", std::process::id());
                     match File::options().create(true).append(true).open(&path) {
                         Ok(file) => {
-                            use std::os::unix::io::IntoRawFd;
                             eprintln!("YJIT disasm dump: {path}");
-                            unsafe { OPTIONS.dump_disasm = Some(DumpDisasm::File(file.into_raw_fd())) }
+                            unsafe { OPTIONS.dump_disasm = Some(DumpDisasm::File(crate::utils::file_into_raw_fd(file))) }
                         }
                         Err(err) => eprintln!("Failed to create {path}: {err}"),
                     }
@@ -351,10 +356,9 @@ pub fn parse_option(str_ptr: *const std::os::raw::c_char) -> Option<()> {
 
                 match File::options().create(true).write(true).truncate(true).open(&log_file_path) {
                     Ok(file) => {
-                        use std::os::unix::io::IntoRawFd;
                         eprintln!("YJIT log: {log_file_path}");
 
-                        unsafe { OPTIONS.log = Some(LogOutput::File(file.into_raw_fd())) }
+                        unsafe { OPTIONS.log = Some(LogOutput::File(crate::utils::file_into_raw_fd(file))) }
                         Log::init()
                     }
                     Err(err) => panic!("Failed to create {log_file_path}: {err}"),

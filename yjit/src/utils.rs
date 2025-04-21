@@ -4,6 +4,12 @@ use crate::backend::ir::*;
 use crate::cruby::*;
 use std::slice;
 use std::os::raw::c_int;
+use std::fs::File;
+
+#[cfg(not(windows))]
+use std::os::unix::io::RawFd as RawFd;
+#[cfg(windows)]
+use std::os::windows::prelude::RawHandle as RawFd;
 
 /// Trait for casting to [usize] that allows you to say `.as_usize()`.
 /// Implementation conditional on the cast preserving the numeric value on
@@ -151,7 +157,10 @@ macro_rules! c_callable {
     ($(#[$outer:meta])*
     fn $f:ident $args:tt $(-> $ret:ty)? $body:block) => {
         $(#[$outer])*
+        #[cfg(not(windows))]
         extern "sysv64" fn $f $args $(-> $ret)? $body
+        #[cfg(windows)]
+        extern fn $f $args $(-> $ret)? $body
     };
 }
 pub(crate) use c_callable;
@@ -240,12 +249,53 @@ pub fn print_str(asm: &mut Assembler, str: &str) {
     asm.cpop_all();
 }
 
+#[cfg(not(windows))]
 pub fn stdout_supports_colors() -> bool {
     // TODO(max): Use std::io::IsTerminal after upgrading Rust to 1.70
     extern "C" { fn isatty(fd: c_int) -> c_int; }
     let stdout = 1;
     let is_terminal = unsafe { isatty(stdout) } == 1;
     is_terminal
+}
+
+#[cfg(windows)]
+pub fn stdout_supports_colors() -> bool {
+    use std::os::raw::c_ulong;
+    extern "system" {
+        pub fn GetStdHandle(nStdHandle: c_ulong) -> usize;
+        pub fn GetConsoleMode(hConsoleHandle: usize, lpMode: *mut c_ulong) -> c_int;
+    }
+    let is_terminal = unsafe {
+        const STD_OUTPUT_HANDLE: c_ulong = -11i32 as c_ulong;
+        let mut console_mode: c_ulong = 0;
+        let console_output_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+        GetConsoleMode(console_output_handle, &mut console_mode) != 0
+    };
+    is_terminal
+}
+
+#[cfg(not(windows))]
+pub fn file_from_raw_fd(fd: RawFd) -> File {
+    use std::os::unix::io::FromRawFd;
+    unsafe { std::fs::File::from_raw_fd(fd) }
+}
+
+#[cfg(windows)]
+pub fn file_from_raw_fd(handle: RawFd) -> File {
+    use std::os::windows::io::FromRawHandle;
+    unsafe { std::fs::File::from_raw_handle(handle) }
+}
+
+#[cfg(not(windows))]
+pub fn file_into_raw_fd(file: File) -> RawFd {
+    use std::os::unix::io::IntoRawFd;
+    file.into_raw_fd()
+}
+
+#[cfg(windows)]
+pub fn file_into_raw_fd(file: File) -> RawFd {
+    use std::os::windows::io::IntoRawHandle;
+    file.into_raw_handle()
 }
 
 #[cfg(test)]
