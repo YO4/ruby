@@ -78,7 +78,11 @@ STATIC_ASSERT(pointer_tagging_scheme, USE_FLONUM);
 bool
 rb_yjit_mark_writable(void *mem_block, uint32_t mem_size)
 {
+#ifndef _WIN32
     return mprotect(mem_block, mem_size, PROT_READ | PROT_WRITE) == 0;
+#else
+    return VirtualAlloc(mem_block, mem_size, MEM_COMMIT, PAGE_READWRITE);
+#endif
 }
 
 void
@@ -89,16 +93,26 @@ rb_yjit_mark_executable(void *mem_block, uint32_t mem_size)
     if (mem_size == 0) {
         return;
     }
+#ifndef _WIN32
     if (mprotect(mem_block, mem_size, PROT_READ | PROT_EXEC)) {
         rb_bug("Couldn't make JIT page (%p, %lu bytes) executable, errno: %s",
             mem_block, (unsigned long)mem_size, strerror(errno));
     }
+#else
+    DWORD oldprotect;
+    if (!VirtualProtect(mem_block, mem_size, PAGE_EXECUTE_READ, &oldprotect)) {
+        errno = rb_w32_map_errno(GetLastError());
+        rb_bug("Couldn't make JIT page (%p, %lu bytes) executable, errno: %s",
+            mem_block, (unsigned long)mem_size, strerror(errno));
+    }
+#endif
 }
 
 // Free the specified memory block.
 bool
 rb_yjit_mark_unused(void *mem_block, uint32_t mem_size)
 {
+#ifndef _WIN32
     // On Linux, you need to use madvise MADV_DONTNEED to free memory.
     // We might not need to call this on macOS, but it's not really documented.
     // We generally prefer to do the same thing on both to ease testing too.
@@ -107,6 +121,12 @@ rb_yjit_mark_unused(void *mem_block, uint32_t mem_size)
     // On macOS, mprotect PROT_NONE seems to reduce RSS.
     // We also call this on Linux to avoid executing unused pages.
     return mprotect(mem_block, mem_size, PROT_NONE) == 0;
+#else
+    // Indicates that data in the memory range is no longer of interest.
+    // The pages should not be read from or written to the paging file.
+    // The pages are still commited.
+    return VirtualAlloc(mem_block, mem_size, MEM_RESET, PAGE_READWRITE) != 0;
+#endif
 }
 
 long
@@ -226,8 +246,17 @@ rb_yjit_exit_locations_dict(VALUE *yjit_raw_samples, int *yjit_line_samples, int
 uint32_t
 rb_yjit_get_page_size(void)
 {
+    long page_size = 0;
 #if defined(_SC_PAGESIZE)
-    long page_size = sysconf(_SC_PAGESIZE);
+    page_size = sysconf(_SC_PAGESIZE);
+#elif defined(_WIN32)
+    SYSTEM_INFO siSysInfo;
+
+    GetSystemInfo(&siSysInfo);
+    page_size = siSysInfo.dwPageSize;
+#else
+#error "YJIT supports POSIX only for now"
+#endif
     if (page_size <= 0) rb_bug("yjit: failed to get page size");
 
     // 1 GiB limit. x86 CPUs with PDPE1GB can do this and anything larger is unexpected.
@@ -236,9 +265,6 @@ rb_yjit_get_page_size(void)
     if (page_size > 0x40000000l) rb_bug("yjit page size too large");
 
     return (uint32_t)page_size;
-#else
-#error "YJIT supports POSIX only for now"
-#endif
 }
 
 #if defined(MAP_FIXED_NOREPLACE) && defined(_SC_PAGESIZE)
@@ -343,8 +369,8 @@ rb_yjit_reserve_addr_space(uint32_t mem_size)
 
     return mem_block;
 #else
-    // Windows not supported for now
-    return NULL;
+    // On Windows
+    return rb_w32_reserve_addr_space(mem_size);
 #endif
 }
 

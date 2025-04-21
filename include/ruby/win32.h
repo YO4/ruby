@@ -814,13 +814,7 @@ double rb_w32_pow(double x, double y);
 #define MAP_ANON	0x1000
 #define MAP_ANONYMOUS	MAP_ANON
 
-extern void *rb_w32_mmap(void *, size_t, int, int, int, rb_off_t);
-extern int rb_w32_munmap(void *, size_t);
-extern int rb_w32_mprotect(void *, size_t, int);
-
-#define mmap(a, l, p, f, d, o) rb_w32_mmap(a, l, p, f, d, o)
-#define munmap(a, l) rb_w32_munmap(a, l)
-#define mprotect(a, l, prot) rb_w32_mprotect(a, l, prot)
+uint8_t *rb_w32_reserve_addr_space(uint32_t);
 
 #if defined(__cplusplus)
 #if 0

@@ -8310,70 +8310,43 @@ VALUE (*const rb_f_notimplement_)(int, const VALUE *, VALUE, VALUE) = rb_f_notim
 #include "missing/nextafter.c"
 #endif
 
-void *
-rb_w32_mmap(void *addr, size_t len, int prot, int flags, int fd, rb_off_t offset)
+uint8_t *
+rb_w32_reserve_addr_space(uint32_t mem_size)
 {
-    void *ptr;
-    //DWORD protect = 0;
-    DWORD protect = PAGE_EXECUTE_READWRITE;
+    uint8_t *mem_block;
+    uint8_t *const cfunc_sample_addr = (void *)(uintptr_t)&rb_w32_reserve_addr_space;
 
-    if (fd > 0 || offset) {
-        /* not supported */
-        errno = EINVAL;
-        return MAP_FAILED;
+    // Searches upward for a free memory address area.
+    mem_block = VirtualAlloc(cfunc_sample_addr, mem_size, MEM_RESERVE, PAGE_NOACCESS);
+    if (mem_block != NULL) {
+        return mem_block;
     }
-
-/*
-    if (prot & PROT_EXEC) {
-        if (prot & PROT_WRITE) protect = PAGE_EXECUTE_READWRITE;
-        else if (prot & PROT_READ) protect = PAGE_EXECUTE_READ;
-        else protect = PAGE_EXECUTE;
-    }
-    else if (prot & PROT_WRITE) protect = PAGE_READWRITE;
-    else if (prot & PROT_READ) protect = PAGE_READONLY;
-*/
-    ptr = VirtualAlloc(addr, len, MEM_RESERVE | MEM_COMMIT, protect);
-    if (!ptr) {
-        errno = rb_w32_map_errno(GetLastError());
-        return MAP_FAILED;
-    }
-
-    return ptr;
-}
-
-int
-rb_w32_munmap(void *addr, size_t len)
-{
-    if (!VirtualFree(addr, 0, MEM_RELEASE)) {
-        errno = rb_w32_map_errno(GetLastError());
-        return -1;
-    }
-
-    return 0;
-}
-
-inline int
-rb_w32_mprotect(void *addr, size_t len, int prot)
-{
-/*
-    DWORD protect = 0;
-    if (prot & PROT_EXEC) {
-        if (prot & PROT_WRITE) protect = PAGE_EXECUTE_READWRITE;
-        else if (prot & PROT_READ) protect = PAGE_EXECUTE_READ;
-        else protect = PAGE_EXECUTE;
-    }
-    else if (prot & PROT_WRITE) protect = PAGE_READWRITE;
-    else if (prot & PROT_READ) protect = PAGE_READONLY;
-    if (!VirtualProtect(addr, len, protect, NULL)) {
-        errno = rb_w32_map_errno(GetLastError());
-        return -1;
-    }
-*/
-    if (prot & PROT_EXEC) {
-        if (!FlushInstructionCache(GetCurrentProcess(), addr, len)) {
-            errno = rb_w32_map_errno(GetLastError());
-            return -1;
+    // Searches downward for a free memory address area.
+    uint8_t *probe_addr = cfunc_sample_addr;
+    MEMORY_BASIC_INFORMATION mbi;
+    VirtualQuery(probe_addr, &mbi, sizeof(mbi));
+    uint8_t *ruby_base = mbi.AllocationBase;
+    do {
+        if (!VirtualQuery(probe_addr, &mbi, sizeof(mbi))) break;
+        if (mbi.State == MEM_FREE && mbi.RegionSize >= mem_size) {
+            uint8_t *req_addr = (uint8_t *)mbi.BaseAddress + (mbi.RegionSize - mem_size);
+            mem_block = VirtualAlloc(req_addr, mem_size, MEM_RESERVE, PAGE_NOACCESS);
+            if (mem_block != NULL) {
+                return mem_block;
+            }
         }
+        if ((intptr_t)probe_addr < mem_size) break;
+        if ((uint8_t *)mbi.BaseAddress < probe_addr - mem_size) {
+            probe_addr = mbi.BaseAddress;
+        }
+        else {
+            probe_addr = probe_addr - mem_size;
+        }
+    } while (probe_addr > ruby_base + INT32_MIN);
+    // Fallback
+    mem_block = VirtualAlloc(NULL, mem_size, MEM_RESERVE, PAGE_NOACCESS);
+    if (!mem_block) {
+        errno = map_errno(GetLastError());
     }
-    return 0;
+    return mem_block;
 }
