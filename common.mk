@@ -182,6 +182,7 @@ COMMONOBJS    = array.$(OBJEXT) \
 		vm_sync.$(OBJEXT) \
 		vm_trace.$(OBJEXT) \
 		weakmap.$(OBJEXT) \
+		$(MISSING) \
 		$(PRISM_FILES) \
 		$(YJIT_OBJ) \
 		$(YJIT_LIBOBJ) \
@@ -190,8 +191,7 @@ COMMONOBJS    = array.$(OBJEXT) \
 		$(COROUTINE_OBJ) \
 		$(DTRACE_OBJ) \
 		$(BUILTIN_ENCOBJS) \
-		$(BUILTIN_TRANSOBJS) \
-		$(MISSING)
+		$(BUILTIN_TRANSOBJS)
 
 $(PRISM_FILES): $(PRISM_BUILD_DIR)/.time $(PRISM_BUILD_DIR)/util/.time
 
