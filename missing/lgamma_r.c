@@ -9,6 +9,7 @@ reference - Haruhiko Okumura: C-gengo niyoru saishin algorithm jiten
 */
 
 #include "ruby/missing.h"
+#if !defined(USE_YJIT) && !defined(USE_ZJIT)
 /***********************************************************
     gamma.c -- Gamma function
 ***********************************************************/
@@ -78,3 +79,4 @@ lgamma_r(double x, int *signp)
     *signp = 1;
     return loggamma(x);
 }
+#endif

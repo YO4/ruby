@@ -4006,7 +4006,11 @@ AS_CASE(["${YJIT_SUPPORT}"],
     JIT_OBJ='jit.$(OBJEXT)'
     AS_CASE(["$target_os"],
       [msys*|mingw*], [
+        RUST_LIBOBJ=
         LIBS="-lntdll -luserenv $LIBS"
+        ],
+      [
+        RUST_LIBOBJ='$(RUST_LIB:.a=.$(OBJEXT))'
         ])
     AS_IF([test x"$YJIT_SUPPORT" != "xyes" ], [
         AC_DEFINE_UNQUOTED(YJIT_SUPPORT, [$YJIT_SUPPORT])
@@ -4120,6 +4124,7 @@ AC_SUBST(ZJIT_LIBS)dnl path to the .a library of ZJIT
 AC_SUBST(ZJIT_OBJ)dnl for optionally building the C parts of ZJIT
 AC_SUBST(JIT_OBJ)dnl for optionally building C glue code for Rust FFI
 AC_SUBST(RUST_LIB)dnl path to the rust .a library that contains either or both JITs
+AC_SUBST(RUST_LIBOBJ)dnl path to the rust .o library that contains either or both JITs
 AC_SUBST(RLIB_DIR)dnl subpath of build directory for .rlib files
 AC_SUBST(JIT_CARGO_SUPPORT)dnl "no" or the cargo profile of the rust code
 }
