@@ -4004,6 +4004,10 @@ AS_CASE(["${YJIT_SUPPORT}"],
     RUST_LIB='$(YJIT_LIBS)'
     YJIT_OBJ='yjit.$(OBJEXT)'
     JIT_OBJ='jit.$(OBJEXT)'
+    AS_CASE(["$target_os"],
+      [msys*|mingw*], [
+        LIBS="-lntdll -luserenv $LIBS"
+        ])
     AS_IF([test x"$YJIT_SUPPORT" != "xyes" ], [
         AC_DEFINE_UNQUOTED(YJIT_SUPPORT, [$YJIT_SUPPORT])
     ])
