@@ -16,9 +16,16 @@ pub const EC: Opnd = _EC;
 pub const CFP: Opnd = _CFP;
 pub const SP: Opnd = _SP;
 
+#[cfg(not(windows))]
 pub const C_ARG_OPNDS: [Opnd; 6] = _C_ARG_OPNDS;
+#[cfg(windows)]
+pub const C_ARG_OPNDS: [Opnd; 4] = _C_ARG_OPNDS;
+pub const C_ARG_OPNDS_MAX: usize = 6;
 pub const C_RET_OPND: Opnd = _C_RET_OPND;
 pub use crate::backend::current::{Reg, C_RET_REG};
+
+#[cfg(windows)]
+pub const WIN64ABI_RSP_ALLOC_SIZE: u8 = 48; // shadow store 4 args (32) + 2 stack args(16)
 
 // Memory operand base
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -146,6 +153,7 @@ impl Opnd
     pub fn c_arg(reg_opnd: Opnd) -> Self {
         match reg_opnd {
             Opnd::Reg(reg) => Opnd::CArg(reg),
+            Opnd::Mem(mem) => Opnd::Mem(mem),
             _ => unreachable!(),
         }
     }

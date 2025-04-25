@@ -17,6 +17,7 @@ pub const _EC: Opnd = Opnd::Reg(R12_REG);
 pub const _SP: Opnd = Opnd::Reg(RBX_REG);
 
 // C argument registers on this platform
+#[cfg(not(windows))]
 pub const _C_ARG_OPNDS: [Opnd; 6] = [
     Opnd::Reg(RDI_REG),
     Opnd::Reg(RSI_REG),
@@ -24,6 +25,13 @@ pub const _C_ARG_OPNDS: [Opnd; 6] = [
     Opnd::Reg(RCX_REG),
     Opnd::Reg(R8_REG),
     Opnd::Reg(R9_REG)
+];
+#[cfg(windows)]
+pub const _C_ARG_OPNDS: [Opnd; 4] = [
+    Opnd::Reg(RCX_REG),
+    Opnd::Reg(RDX_REG),
+    Opnd::Reg(R8_REG),
+    Opnd::Reg(R9_REG),
 ];
 
 // C return value register on this platform
@@ -102,7 +110,10 @@ impl Assembler
 
     /// Get a list of all of the caller-save registers
     pub fn get_caller_save_regs() -> Vec<Reg> {
-        vec![RAX_REG, RCX_REG, RDX_REG, RSI_REG, RDI_REG, R8_REG, R9_REG, R10_REG, R11_REG]
+        #[cfg(not(windows))]
+        return vec![RAX_REG, RCX_REG, RDX_REG, RSI_REG, RDI_REG, R8_REG, R9_REG, R10_REG, R11_REG];
+        #[cfg(windows)]
+        return vec![RAX_REG, RCX_REG, RDX_REG,                   R8_REG, R9_REG, R10_REG, R11_REG];
     }
 
     // These are the callee-saved registers in the x86-64 SysV ABI
@@ -360,17 +371,99 @@ impl Assembler
                     asm.not(opnd0);
                 },
                 Insn::CCall { opnds, fptr, .. } => {
-                    assert!(opnds.len() <= C_ARG_OPNDS.len());
+                    assert!(opnds.len() <= C_ARG_OPNDS_MAX);
+                    #[cfg(windows)]
+                    {
+                        // Windows ABI requires stack space for at least 4arguments.
+                        asm.push_insn(
+                            Insn::Sub {
+                                left: Opnd::Reg(x86_64::RSP_REG),
+                                right: Opnd::UImm(WIN64ABI_RSP_ALLOC_SIZE.into()),
+                                out: Opnd::Reg(x86_64::RSP_REG)
+                            });
+                    }
+
+                    // Load each operand into the corresponding place in stack.
+                    if opnds.len() > C_ARG_OPNDS.len() {
+                        for (idx, opnd) in opnds[C_ARG_OPNDS.len()..].into_iter().enumerate() {
+                            match *opnd {
+                                Opnd::Mem(mem) => {
+                                    //let opnd1 = asm.load(*opnd);
+                                    let nbits = mem.num_bits;
+                                    let temp_reg = Opnd::Reg(X86Reg { num_bits: nbits, reg_type: Assembler::SCRATCH_REG.reg_type, reg_no: Assembler::SCRATCH_REG.reg_no });
+                                    asm.load_into(
+                                        temp_reg,
+                                        *opnd
+                                        );
+                                    asm.mov(
+                                        Opnd::Mem(Mem{ base: MemBase::Reg(RSP_REG.reg_no), disp: (32 + idx * 8) as i32, num_bits: nbits}),
+                                        temp_reg,
+                                        );
+                                },
+                                Opnd::Stack { .. } => {
+                                    // stack temp regs are already spilled
+                                    let opnd = asm.lower_stack_opnd(opnd);
+                                    let opnd1 = asm.load(opnd);
+                                    asm.load_into(
+                                        Opnd::Mem(Mem{ base: MemBase::Reg(RSP_REG.reg_no), disp: (32 + idx * 8) as i32, num_bits: opnd1.num_bits().unwrap() }),
+                                        opnd1,
+                                        );
+                                },
+                                Opnd::Imm(imm) => {
+                                    let opnd1 = asm.load(*opnd);
+                                    let nbits = imm_num_bits(imm);
+                                    let opnd2 = if nbits != 64 {
+                                        asm.load_sext(opnd1)
+                                    } else {
+                                        opnd1
+                                    };
+                                    asm.mov(
+                                        Opnd::Mem(Mem{ base: MemBase::Reg(RSP_REG.reg_no), disp: (32 + idx * 8) as i32, num_bits: 64}),
+                                        opnd2,
+                                        );
+                                },
+                                Opnd::UImm(_imm) => {
+                                    //let opnd1 = asm.load(*opnd);
+                                    let nbits = 64;
+                                    let temp_reg = Opnd::Reg(X86Reg { num_bits: nbits, reg_type: Assembler::SCRATCH_REG.reg_type, reg_no: Assembler::SCRATCH_REG.reg_no });
+                                    asm.load_into(
+                                        temp_reg,
+                                        *opnd
+                                        );
+                                    asm.mov(
+                                        Opnd::Mem(Mem{ base: MemBase::Reg(RSP_REG.reg_no), disp: (32 + idx * 8) as i32, num_bits: nbits}),
+                                        temp_reg,
+                                        );
+                                },
+                                _ => {
+                                    asm.mov(
+                                        Opnd::Mem(Mem{ base: MemBase::Reg(RSP_REG.reg_no), disp: (32 + idx * 8) as i32, num_bits: 64}),
+                                        *opnd);
+                                }
+                            }
+                        }
+                    }
 
                     // Load each operand into the corresponding argument
                     // register.
-                    for (idx, opnd) in opnds.into_iter().enumerate() {
+                    for (idx, opnd) in opnds[0..opnds.len().min(C_ARG_OPNDS.len())].into_iter().enumerate() {
                         asm.load_into(Opnd::c_arg(C_ARG_OPNDS[idx]), *opnd);
                     }
 
                     // Now we push the CCall without any arguments so that it
                     // just performs the call.
                     asm.ccall(*fptr, vec![]);
+
+                    #[cfg(windows)]
+                    {
+                        // Free up stack space for ccall.
+                        asm.push_insn(
+                            Insn::Add {
+                                left: Opnd::Reg(x86_64::RSP_REG),
+                                right: Opnd::UImm(WIN64ABI_RSP_ALLOC_SIZE.into()),
+                                out: Opnd::Reg(x86_64::RSP_REG)
+                            });
+                    }
                 },
                 Insn::Lea { .. } => {
                     // Merge `lea` and `mov` into a single `lea` when possible
@@ -1174,9 +1267,17 @@ mod tests {
         ]);
         asm.compile_with_num_regs(&mut cb, 0);
 
+        #[cfg(not(windows))]
         assert_disasm!(cb, "b800000000ffd0", {"
             0x0: mov eax, 0
             0x5: call rax
+        "});
+        #[cfg(windows)]
+        assert_disasm!(cb, "4883ec30b800000000ffd04883c430", {"
+            0x0: sub rsp, 0x30
+            0x4: mov eax, 0
+            0x9: call rax
+            0xb: add rsp, 0x30
         "});
     }
 
@@ -1192,12 +1293,23 @@ mod tests {
         ]);
         asm.compile_with_num_regs(&mut cb, 0);
 
+        #[cfg(not(windows))]
         assert_disasm!(cb, "4989f34889fe4c89dfb800000000ffd0", {"
             0x0: mov r11, rsi
             0x3: mov rsi, rdi
             0x6: mov rdi, r11
             0x9: mov eax, 0
             0xe: call rax
+        "});
+        #[cfg(windows)]
+        assert_disasm!(cb, "4883ec304989d34889ca4c89d9b800000000ffd04883c430", {"
+            0x0: sub rsp, 0x30
+            0x4: mov r11, rdx
+            0x7: mov rdx, rcx
+            0xa: mov rcx, r11
+            0xd: mov eax, 0
+            0x12: call rax
+            0x14: add rsp, 0x30
         "});
     }
 
@@ -1214,6 +1326,7 @@ mod tests {
         ]);
         asm.compile_with_num_regs(&mut cb, 0);
 
+        #[cfg(not(windows))]
         assert_disasm!(cb, "4989f34889fe4c89df4989cb4889d14c89dab800000000ffd0", {"
             0x0: mov r11, rsi
             0x3: mov rsi, rdi
@@ -1223,6 +1336,19 @@ mod tests {
             0xf: mov rdx, r11
             0x12: mov eax, 0
             0x17: call rax
+        "});
+        #[cfg(windows)]
+        assert_disasm!(cb, "4883ec304989d34889ca4c89d94d89cb4d89c14d89d8b800000000ffd04883c430", {"
+            0x0: sub rsp, 0x30
+            0x4: mov r11, rdx
+            0x7: mov rdx, rcx
+            0xa: mov rcx, r11
+            0xd: mov r11, r9
+            0x10: mov r9, r8
+            0x13: mov r8, r11
+            0x16: mov eax, 0
+            0x1b: call rax
+            0x1d: add rsp, 0x30
         "});
     }
 
@@ -1238,6 +1364,7 @@ mod tests {
         ]);
         asm.compile_with_num_regs(&mut cb, 0);
 
+        #[cfg(not(windows))]
         assert_disasm!(cb, "4989f34889d64889fa4c89dfb800000000ffd0", {"
             0x0: mov r11, rsi
             0x3: mov rsi, rdx
@@ -1245,6 +1372,17 @@ mod tests {
             0x9: mov rdi, r11
             0xc: mov eax, 0
             0x11: call rax
+        "});
+        #[cfg(windows)]
+        assert_disasm!(cb, "4883ec304989d34c89c24989c84c89d9b800000000ffd04883c430", {"
+            0x0: sub rsp, 0x30
+            0x4: mov r11, rdx
+            0x7: mov rdx, r8
+            0xa: mov r8, rcx
+            0xd: mov rcx, r11
+            0x10: mov eax, 0
+            0x15: call rax
+            0x17: add rsp, 0x30
         "});
     }
 
@@ -1264,6 +1402,7 @@ mod tests {
         ]);
         asm.compile_with_num_regs(&mut cb, 3);
 
+        #[cfg(not(windows))]
         assert_disasm!(cb, "b801000000b902000000ba030000004889c74889ce4989cb4889d14c89dab800000000ffd0", {"
             0x0: mov eax, 1
             0x5: mov ecx, 2
@@ -1275,6 +1414,20 @@ mod tests {
             0x1b: mov rdx, r11
             0x1e: mov eax, 0
             0x23: call rax
+        "});
+        #[cfg(windows)]
+        assert_disasm!(cb, "b801000000b902000000ba030000004883ec304989c84989d14889ca4889c1b800000000ffd04883c430", {"
+            0x0: mov eax, 1
+            0x5: mov ecx, 2
+            0xa: mov edx, 3
+            0xf: sub rsp, 0x30
+            0x13: mov r8, rcx
+            0x16: mov r9, rdx
+            0x19: mov rdx, rcx
+            0x1c: mov rcx, rax
+            0x1f: mov eax, 0
+            0x24: call rax
+            0x26: add rsp, 0x30
         "});
     }
 

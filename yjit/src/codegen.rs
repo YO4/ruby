@@ -592,6 +592,21 @@ fn gen_save_sp_with_offset(asm: &mut Assembler, offset: i8) {
     }
 }
 
+/// function epilogue
+fn gen_function_epilogue(asm: &mut Assembler) {
+    #[cfg(windows)]
+    {
+        asm.cpop_into(Opnd::Reg(x86_64::RDI_REG));
+        asm.cpop_into(Opnd::Reg(x86_64::RSI_REG));
+    }
+
+    asm.cpop_into(SP);
+    asm.cpop_into(EC);
+    asm.cpop_into(CFP);
+
+    asm.frame_teardown();
+}
+
 /// Basically jit_prepare_non_leaf_call(), but this registers the current PC
 /// to lazily push a C method frame when it's necessary.
 fn jit_prepare_lazy_frame_call(
@@ -808,12 +823,7 @@ fn gen_stub_exit(ocb: &mut OutlinedCb) -> Option<CodePtr> {
     gen_counter_incr_without_pc(&mut asm, Counter::exit_from_branch_stub);
 
     asm_comment!(asm, "exit from branch stub");
-    asm.cpop_into(SP);
-    asm.cpop_into(EC);
-    asm.cpop_into(CFP);
-
-    asm.frame_teardown();
-
+    gen_function_epilogue(&mut asm);
     asm.cret(Qundef.into());
 
     asm.compile(ocb, None).map(|(code_ptr, _)| code_ptr)
@@ -869,12 +879,7 @@ fn gen_exit(exit_pc: *mut VALUE, asm: &mut Assembler) {
         }
     }
 
-    asm.cpop_into(SP);
-    asm.cpop_into(EC);
-    asm.cpop_into(CFP);
-
-    asm.frame_teardown();
-
+    gen_function_epilogue(asm);
     asm.cret(Qundef.into());
 }
 
@@ -982,12 +987,8 @@ fn gen_full_cfunc_return(ocb: &mut OutlinedCb) -> Option<CodePtr> {
     gen_counter_incr_without_pc(&mut asm, Counter::traced_cfunc_return);
 
     // Return to the interpreter
-    asm.cpop_into(SP);
-    asm.cpop_into(EC);
-    asm.cpop_into(CFP);
 
-    asm.frame_teardown();
-
+    gen_function_epilogue(&mut asm);
     asm.cret(Qundef.into());
 
     asm.compile(ocb, None).map(|(code_ptr, _)| code_ptr)
@@ -1007,12 +1008,8 @@ fn gen_leave_exit(ocb: &mut OutlinedCb) -> Option<CodePtr> {
     gen_counter_incr_without_pc(&mut asm, Counter::leave_interp_return);
 
     asm_comment!(asm, "exit from leave");
-    asm.cpop_into(SP);
-    asm.cpop_into(EC);
-    asm.cpop_into(CFP);
 
-    asm.frame_teardown();
-
+    gen_function_epilogue(&mut asm);
     asm.cret(ret_opnd);
 
     asm.compile(ocb, None).map(|(code_ptr, _)| code_ptr)
@@ -1040,11 +1037,8 @@ fn gen_leave_exception(ocb: &mut OutlinedCb) -> Option<CodePtr> {
     asm.mov(cfp_sp, new_sp);
 
     asm_comment!(asm, "exit from exception");
-    asm.cpop_into(SP);
-    asm.cpop_into(EC);
-    asm.cpop_into(CFP);
 
-    asm.frame_teardown();
+    gen_function_epilogue(&mut asm);
 
     // Execute vm_exec_core
     asm.cret(Qundef.into());
@@ -1106,6 +1100,13 @@ pub fn gen_entry_prologue(
     asm.cpush(CFP);
     asm.cpush(EC);
     asm.cpush(SP);
+
+    #[cfg(windows)]
+    {
+        // RSI and RDI are callee-saved on Windows ABI
+        asm.cpush(Opnd::Reg(x86_64::RSI_REG));
+        asm.cpush(Opnd::Reg(x86_64::RDI_REG));
+    }
 
     // We are passed EC and CFP as arguments
     asm.mov(EC, C_ARG_OPNDS[0]);
@@ -4863,13 +4864,10 @@ fn gen_throw(
     let val = asm.ccall(rb_vm_throw as *mut u8, vec![EC, CFP, throw_state.into(), throwobj]);
 
     asm_comment!(asm, "exit from throw");
-    asm.cpop_into(SP);
-    asm.cpop_into(EC);
-    asm.cpop_into(CFP);
 
-    asm.frame_teardown();
-
+    gen_function_epilogue(asm);
     asm.cret(val);
+
     Some(EndBlock)
 }
 
@@ -6975,7 +6973,7 @@ fn gen_send_cfunc(
     }
 
     // Don't JIT functions that need C stack arguments for now
-    if cfunc_argc >= 0 && passed_argc + 1 > (C_ARG_OPNDS.len() as i32) {
+    if cfunc_argc >= 0 && passed_argc + 1 > C_ARG_OPNDS_MAX.try_into().unwrap() {
         gen_counter_incr(jit, asm, Counter::send_cfunc_toomany_args);
         return None;
     }
@@ -7021,7 +7019,7 @@ fn gen_send_cfunc(
     if flags & VM_CALL_ARGS_SPLAT != 0 && cfunc_argc >= 0 {
         let required_args : u32 = (cfunc_argc as u32).saturating_sub(argc as u32 - 1);
         // + 1 because we pass self
-        if required_args + 1 >= C_ARG_OPNDS.len() as u32 {
+        if required_args + 1 >= C_ARG_OPNDS_MAX.try_into().unwrap() {
             gen_counter_incr(jit, asm, Counter::send_cfunc_toomany_args);
             return None;
         }
@@ -7692,7 +7690,7 @@ fn gen_send_iseq(
     if let (None, Some(builtin_info), true, false, None | Some(0)) =
            (block, builtin_func, builtin_attrs & BUILTIN_ATTR_LEAF != 0, opt_send_call, splat_array_length) {
         let builtin_argc = unsafe { (*builtin_info).argc };
-        if builtin_argc + 1 < (C_ARG_OPNDS.len() as i32) {
+        if builtin_argc + 1 < C_ARG_OPNDS_MAX.try_into().unwrap() {
             // We pop the block arg without using it because:
             //  - the builtin is leaf, so it promises to not `yield`.
             //  - no leaf builtins have block param at the time of writing, and
@@ -10536,7 +10534,7 @@ fn gen_invokebuiltin(
     let bf_argc: usize = unsafe { (*bf).argc }.try_into().expect("non negative argc");
 
     // ec, self, and arguments
-    if bf_argc + 2 > C_ARG_OPNDS.len() {
+    if bf_argc + 2 > C_ARG_OPNDS_MAX.try_into().unwrap() {
         incr_counter!(invokebuiltin_too_many_args);
         return None;
     }
@@ -10575,7 +10573,7 @@ fn gen_opt_invokebuiltin_delegate(
     let start_index = jit.get_arg(1).as_i32();
 
     // ec, self, and arguments
-    if bf_argc + 2 > (C_ARG_OPNDS.len() as i32) {
+    if bf_argc + 2 > C_ARG_OPNDS_MAX.try_into().unwrap() {
         incr_counter!(invokebuiltin_too_many_args);
         return None;
     }
