@@ -106,7 +106,7 @@ impl fmt::Debug for Opnd {
             Self::None => write!(fmt, "None"),
             Value(val) => write!(fmt, "Value({val:?})"),
             CArg(reg) => write!(fmt, "CArg({reg:?})"),
-            Stack { idx, sp_offset, .. } => write!(fmt, "SP[{}]", *sp_offset as i32 - idx - 1),
+            Stack { idx, sp_offset, num_bits, .. } => write!(fmt, "SP[{}]_{}", *sp_offset as i32 - idx - 1, num_bits),
             InsnOut { idx, num_bits } => write!(fmt, "Out{num_bits}({idx})"),
             Imm(signed) => write!(fmt, "{signed:x}_i64"),
             UImm(unsigned) => write!(fmt, "{unsigned:x}_u64"),
@@ -1575,9 +1575,8 @@ impl Assembler
                         }
                     };
                 }
-
                 // Set the output operand on the instruction
-                let out_num_bits = Opnd::match_num_bits_iter(insn.opnd_iter());
+                let out_num_bits = insn.out_opnd().unwrap().num_bits().unwrap();
 
                 // If we have gotten to this point, then we're sure we have an
                 // output operand on this instruction because the live range
@@ -2021,7 +2020,7 @@ impl Assembler {
 
     #[must_use]
     pub fn load_sext(&mut self, opnd: Opnd) -> Opnd {
-        let out = self.next_opnd_out(Opnd::match_num_bits(&[opnd]));
+        let out = self.next_opnd_out(64);
         self.push_insn(Insn::LoadSExt { opnd, out });
         out
     }
