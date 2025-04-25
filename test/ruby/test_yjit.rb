@@ -9,6 +9,9 @@ require 'tmpdir'
 require_relative '../lib/jit_support'
 
 return unless JITSupport.yjit_supported?
+if RUBY_PLATFORM =~ /mingw|mswin/
+  require 'socket'
+end
 
 require 'stringio'
 
@@ -1824,7 +1827,7 @@ class TestYJIT < Test::Unit::TestCase
       end
 
       iseq = RubyVM::InstructionSequence.of(_test_proc)
-      IO.open(3).write Marshal.dump({
+      IO.open(3, "wb").write Marshal.dump({
         result: #{result == ANY ? "nil" : "result"},
         stats: stats,
         insns: collect_insns(iseq),
@@ -1908,24 +1911,46 @@ class TestYJIT < Test::Unit::TestCase
   end
 
   def eval_with_jit(script, call_threshold: 1, timeout: 1000, mem_size: nil, code_gc: false)
+    if RUBY_PLATFORM =~ /mingw|mswin/
+      sockname = File.join(ENV["USERPROFILE"].gsub("\\","/"), "#{method_name}@#{Process.pid}.sock") # Use path shorter than tmpdir
+    end
     args = [
       "--disable-gems",
+      "--yjit", "--yjit-temp-regs=0",
       "--yjit-call-threshold=#{call_threshold}",
       "--yjit-stats=quiet"
     ]
     args << "--yjit-exec-mem-size=#{mem_size}" if mem_size
     args << "--yjit-code-gc" if code_gc
+    if sockname
+      args << "-rsocket"
+      args << "-e"
+      args << script_shell_encode("Object.class_variable_set(:@@stat_w, UNIXSocket.new(\"#{sockname}\"))")
+    end
     args << "-e" << script_shell_encode(script)
-    stats_r, stats_w = IO.pipe
+    if sockname
+      srv = UNIXServer.new(sockname)
+    else
+      stats_r, stats_w = IO.pipe
+    end
     # Separate thread so we don't deadlock when
     # the child ruby blocks writing the stats to fd 3
     stats = ''
     stats_reader = Thread.new do
+      if sockname
+        result = IO.select([srv], [], [], timeout = timeout * 2)
+        if result
+          stats_r = srv.accept
+        else
+          raise Timeout::Error # unreachable
+        end
+      end
       stats = stats_r.read
       stats_r.close
     end
-    out, err, status = invoke_ruby(args, '', true, true, timeout: timeout, ios: { 3 => stats_w })
-    stats_w.close
+    ios = sockname ? {} : { 3 => stats_w }
+    out, err, status = invoke_ruby(args, '', true, true, timeout: timeout, ios: ios)
+    stats_w.close unless sockname
     stats_reader.join(timeout)
     stats = Marshal.load(stats) if !stats.empty?
     [status, out, err, stats]
@@ -1934,6 +1959,13 @@ class TestYJIT < Test::Unit::TestCase
     stats_reader&.join(timeout)
     stats_r&.close
     stats_w&.close
+    if sockname
+      srv&.close
+      begin
+        File.unlink sockname
+      rescue StandardError
+      end
+    end
   end
 
   # A wrapper of EnvUtil.invoke_ruby that uses RbConfig.ruby instead of EnvUtil.ruby
