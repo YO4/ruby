@@ -37,6 +37,7 @@ class Exports
     winapis = {}
     syms["ruby_sysinit_real"] = "ruby_sysinit"
     each_export(objs) do |internal, export|
+      next if internal =~ /\.|^_+imp_|^_?ZN[0-9]+.*[0-9a-f]{16}E$/
       syms[internal] = export
       winapis[$1] = internal if /^_?(rb_w32_\w+)(?:@\d+)?$/ =~ internal
     end
@@ -103,6 +104,7 @@ class Exports::Mswin < Exports
 
   def each_export(objs)
     noprefix = ($arch ||= nil and /^(sh|i\d86)/ !~ $arch)
+    leaveprefix = /^x64/ =~ $arch
     objs = objs.collect {|s| s.tr('/', '\\')}
     filetype = nil
     objdump(objs) do |l|
@@ -115,7 +117,10 @@ class Exports::Mswin < Exports
           next if /(?:_local_stdio_printf_options|v(f|sn?)printf(_s)?_l)\Z/ =~ l
           next unless l.sub!(/.*?\s(\(\)\s+)?External\s+\|\s+/, '')
           is_data = !$1
-          if noprefix or /^[@_]/ =~ l
+          if leaveprefix
+            next if /(?!^)@.*@/ =~ l || /@[[:xdigit:]]{8,32}$/ =~ l ||
+                    /^_?#{PrivateNames}/o =~ l
+          elsif noprefix or /^[@_]/ =~ l
             next if /(?!^)@.*@/ =~ l || /@[[:xdigit:]]{8,32}$/ =~ l ||
                     /^_?#{PrivateNames}/o =~ l
             l.sub!(/^[@_]/, '') if /@\d+$/ !~ l
