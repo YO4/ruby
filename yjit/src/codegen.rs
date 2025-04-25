@@ -21,6 +21,10 @@ use std::ffi::c_void;
 use std::ffi::CStr;
 use std::mem;
 use std::os::raw::{c_int, c_long};
+#[cfg(not(windows))]
+use std::os::raw::{c_ulong};
+#[cfg(windows)]
+use std::os::raw::{c_ulonglong};
 use std::ptr;
 use std::rc::Rc;
 use std::cell::RefCell;
@@ -1620,9 +1624,16 @@ fn fuse_putobject_opt_ltlt(
     if next_opcode == YARVINSN_opt_ltlt as i32 && constant_object.fixnum_p() {
         // Untag the fixnum shift amount
         let shift_amt = constant_object.as_isize() >> 1;
+
+        #[cfg(not(windows))]
         if shift_amt > 63 || shift_amt < 0 {
             return None;
         }
+        #[cfg(windows)]
+        if shift_amt > 31 || shift_amt < 0 {
+            return None;
+        }
+
         if !jit.at_compile_target() {
             return jit.defer_compilation(asm);
         }
@@ -1764,12 +1775,21 @@ fn gen_opt_plus(
 
         // Add arg0 + arg1 and test for overflow
         let arg0_untag = asm.sub(arg0, Opnd::Imm(1));
+        #[cfg(not(windows))]
         let out_val = asm.add(arg0_untag, arg1);
+        #[cfg(windows)]
+        let out_val = asm.add(arg0_untag.with_num_bits(32)?, arg1.with_num_bits(32)?);
         asm.jo(Target::side_exit(Counter::opt_plus_overflow));
 
         // Push the output on the stack
         let dst = asm.stack_push(Type::Fixnum);
+        #[cfg(not(windows))]
         asm.mov(dst, out_val);
+        #[cfg(windows)]
+        {
+            let out_val = asm.load_sext(out_val);
+            asm.mov(dst, out_val);
+        }
 
         Some(KeepCompiling)
     } else {
@@ -3591,7 +3611,10 @@ fn gen_fixnum_cmp(
         let arg0 = asm.stack_pop(1);
 
         // Compare the arguments
+        #[cfg(not(windows))]
         asm.cmp(arg0, arg1);
+        #[cfg(windows)]
+        asm.cmp(arg0.with_num_bits(32)?, arg1.with_num_bits(32)?);
         let bool_opnd = cmov_op(asm, Qtrue.into(), Qfalse.into());
 
         // Push the output on the stack
@@ -3656,7 +3679,10 @@ fn gen_equality_specialized(
 
         guard_two_fixnums(jit, asm);
 
+        #[cfg(not(windows))]
         asm.cmp(a_opnd, b_opnd);
+        #[cfg(windows)]
+        asm.cmp(a_opnd.with_num_bits(32)?, b_opnd.with_num_bits(32)?);
         let val = if gen_eq {
             asm.csel_e(Qtrue.into(), Qfalse.into())
         } else {
@@ -4109,13 +4135,25 @@ fn gen_opt_minus(
         let arg0 = asm.stack_pop(1);
 
         // Subtract arg0 - arg1 and test for overflow
+        #[cfg(not(windows))]
         let val_untag = asm.sub(arg0, arg1);
+        #[cfg(windows)]
+        let val_untag = asm.sub(arg0.with_num_bits(32)?, arg1.with_num_bits(32)?);
         asm.jo(Target::side_exit(Counter::opt_minus_overflow));
+        #[cfg(not(windows))]
         let val = asm.add(val_untag, Opnd::Imm(1));
+        #[cfg(windows)]
+        let val = asm.add(val_untag.with_num_bits(32)?, Opnd::Imm(1));
 
         // Push the output on the stack
         let dst = asm.stack_push(Type::Fixnum);
+        #[cfg(not(windows))]
         asm.mov(dst, val);
+        #[cfg(windows)]
+        {
+            let val = asm.load_sext(val);
+            asm.mov(dst, val);
+        }
 
         Some(KeepCompiling)
     } else {
@@ -4145,20 +4183,38 @@ fn gen_opt_mult(
         guard_two_fixnums(jit, asm);
 
         // Get the operands from the stack
+        #[cfg(not(windows))]
         let arg1 = asm.stack_pop(1);
+        #[cfg(not(windows))]
         let arg0 = asm.stack_pop(1);
+        #[cfg(windows)]
+        let arg1 = asm.stack_pop(1).with_num_bits(32)?;
+        #[cfg(windows)]
+        let arg0 = asm.stack_pop(1).with_num_bits(32)?;
 
         // Do some bitwise gymnastics to handle tag bits
         // x * y is translated to (x >> 1) * (y - 1) + 1
+        #[cfg(not(windows))]
         let arg0_untag = asm.rshift(arg0, Opnd::UImm(1));
+        #[cfg(not(windows))]
         let arg1_untag = asm.sub(arg1, Opnd::UImm(1));
+        #[cfg(windows)]
+        let arg0_untag = asm.rshift(arg0, Opnd::UImm(1)).with_num_bits(32)?;
+        #[cfg(windows)]
+        let arg1_untag = asm.sub(arg1, Opnd::UImm(1)).with_num_bits(32)?;
         let out_val = asm.mul(arg0_untag, arg1_untag);
         jit_chain_guard(JCC_JO_MUL, jit, asm, 1, Counter::opt_mult_overflow);
         let out_val = asm.add(out_val, Opnd::UImm(1));
 
         // Push the output on the stack
         let dst = asm.stack_push(Type::Fixnum);
+        #[cfg(not(windows))]
         asm.mov(dst, out_val);
+        #[cfg(windows)]
+        {
+            let out_val = asm.load_sext(out_val);
+            asm.mov(dst, out_val);
+        }
 
         Some(KeepCompiling)
     } else {
@@ -5400,12 +5456,21 @@ fn jit_rb_int_succ(
     }
 
     asm_comment!(asm, "Integer#succ");
+    #[cfg(not(windows))]
     let out_val = asm.add(recv, Opnd::Imm(2)); // 2 is untagged Fixnum 1
+    #[cfg(windows)]
+    let out_val = asm.add(recv.with_num_bits(32).unwrap(), Opnd::Imm(2)).with_num_bits(32).unwrap();
     asm.jo(Target::side_exit(Counter::opt_succ_overflow));
 
     // Push the output onto the stack
     let dst = asm.stack_push(Type::Fixnum);
+    #[cfg(not(windows))]
     asm.mov(dst, out_val);
+    #[cfg(windows)]
+    {
+        let out_val = asm.load_sext(out_val);
+        asm.mov(dst, out_val);
+    }
 
     true
 }
@@ -5429,12 +5494,21 @@ fn jit_rb_int_pred(
     }
 
     asm_comment!(asm, "Integer#pred");
+    #[cfg(not(windows))]
     let out_val = asm.sub(recv, Opnd::Imm(2)); // 2 is untagged Fixnum 1
+    #[cfg(windows)]
+    let out_val = asm.sub(recv.with_num_bits(32).unwrap(), Opnd::Imm(2)).with_num_bits(32).unwrap();
     asm.jo(Target::side_exit(Counter::send_pred_underflow));
 
     // Push the output onto the stack
     let dst = asm.stack_push(Type::Fixnum);
+    #[cfg(not(windows))]
     asm.mov(dst, out_val);
+    #[cfg(windows)]
+    {
+        let out_val = asm.load_sext(out_val);
+        asm.mov(dst, out_val);
+    }
 
     true
 }
@@ -5494,7 +5568,13 @@ fn jit_rb_int_lshift(
 
     // Untag the fixnum shift amount
     let shift_amt = comptime_shift.as_isize() >> 1;
+
+    #[cfg(not(windows))]
     if shift_amt > 63 || shift_amt < 0 {
+        return false;
+    }
+    #[cfg(windows)]
+    if shift_amt > 31 || shift_amt < 0 {
         return false;
     }
 
@@ -5523,7 +5603,10 @@ fn jit_rb_int_lshift(
 }
 
 fn fixnum_left_shift_body(asm: &mut Assembler, lhs: Opnd, shift_amt: u64) {
+    #[cfg(not(windows))]
     let in_val = asm.sub(lhs, 1.into());
+    #[cfg(windows)]
+    let in_val = asm.sub(lhs, 1.into()).with_num_bits(32).unwrap();
     let shift_opnd = Opnd::UImm(shift_amt);
     let out_val = asm.lshift(in_val, shift_opnd);
     let unshifted = asm.rshift(out_val, shift_opnd);
@@ -5536,7 +5619,13 @@ fn fixnum_left_shift_body(asm: &mut Assembler, lhs: Opnd, shift_amt: u64) {
     let out_val = asm.add(out_val, 1.into());
 
     let ret_opnd = asm.stack_push(Type::Fixnum);
+    #[cfg(not(windows))]
     asm.mov(ret_opnd, out_val);
+    #[cfg(windows)]
+    {
+        let out_val = asm.load_sext(out_val);
+        asm.mov(ret_opnd, out_val);
+    }
 }
 
 fn jit_rb_int_rshift(
@@ -5557,7 +5646,12 @@ fn jit_rb_int_rshift(
 
     // Untag the fixnum shift amount
     let shift_amt = comptime_shift.as_isize() >> 1;
+    #[cfg(not(windows))]
     if shift_amt > 63 || shift_amt < 0 {
+        return false;
+    }
+    #[cfg(windows)]
+    if shift_amt > 31 || shift_amt < 0 {
         return false;
     }
 
@@ -5876,7 +5970,11 @@ fn jit_rb_str_length(
     asm.stack_pop(1); // Keep recv on stack during ccall for GC
 
     // Should be guaranteed to be a fixnum on 64-bit systems
+    #[cfg(not(windows))]
     let out_opnd = asm.stack_push(Type::Fixnum);
+    // On Windows, length can be BigNum
+    #[cfg(windows)]
+    let out_opnd = asm.stack_push(Type::Unknown);
     asm.mov(out_opnd, ret_opnd);
 
     true
@@ -5902,11 +6000,19 @@ fn jit_rb_str_bytesize(
         RUBY_OFFSET_RSTRING_LEN as i32,
     );
 
+    #[cfg(not(windows))]
     let len = asm.load(str_len_opnd);
+    #[cfg(windows)]
+    let len = asm.load_sext(str_len_opnd);
     let shifted_val = asm.lshift(len, Opnd::UImm(1));
     let out_val = asm.or(shifted_val, Opnd::UImm(RUBY_FIXNUM_FLAG as u64));
 
+    // Should be guaranteed to be a fixnum on 64-bit systems
+    #[cfg(not(windows))]
     let out_opnd = asm.stack_push(Type::Fixnum);
+    // On Windows, length can be BigNum
+    #[cfg(windows)]
+    let out_opnd = asm.stack_push(Type::Unknown);
 
     asm.mov(out_opnd, out_val);
 
@@ -6075,6 +6181,8 @@ fn jit_rb_str_getbyte(
         asm.load(recv),
         RUBY_OFFSET_RSTRING_LEN as i32,
     );
+    #[cfg(windows)]
+    let str_len_opnd = asm.load_sext(str_len_opnd);
 
     // Exit if the index is out of bounds
     asm.cmp(idx, str_len_opnd);
@@ -6362,6 +6470,7 @@ fn jit_rb_ary_length(
     let len_opnd = get_array_len(asm, array_reg);
 
     // Convert the length to a fixnum
+    // FIXME: this can be bignum on windows?
     let shifted_val = asm.lshift(len_opnd, Opnd::UImm(1));
     let out_val = asm.or(shifted_val, Opnd::UImm(RUBY_FIXNUM_FLAG as u64));
 
@@ -6688,7 +6797,10 @@ fn c_method_tracing_currently_enabled(jit: &JITState) -> bool {
 unsafe extern "C" fn build_kwhash(ci: *const rb_callinfo, sp: *const VALUE) -> VALUE {
     let kw_arg = vm_ci_kwarg(ci);
     let kw_len: usize = get_cikw_keyword_len(kw_arg).try_into().unwrap();
-    let hash = rb_hash_new_with_size(kw_len as u64);
+    #[cfg(not(windows))]
+    let hash = rb_hash_new_with_size(kw_len as c_ulong);
+    #[cfg(windows)]
+    let hash = rb_hash_new_with_size(kw_len as c_ulonglong);
 
     for kwarg_idx in 0..kw_len {
         let key = get_cikw_keywords_idx(kw_arg, kwarg_idx.try_into().unwrap());
@@ -7218,7 +7330,7 @@ fn get_array_len(asm: &mut Assembler, array_opnd: Opnd) -> Opnd {
 
     // Get the length of the array
     let emb_len_opnd = asm.and(flags_opnd, (RARRAY_EMBED_LEN_MASK as u64).into());
-    let emb_len_opnd = asm.rshift(emb_len_opnd, (RARRAY_EMBED_LEN_SHIFT as u64).into());
+    let emb_len_opnd = asm.rshift(emb_len_opnd, (RARRAY_EMBED_LEN_SHIFT as u64).into()).with_num_bits(std::os::raw::c_long::BITS.try_into().unwrap()).unwrap();
 
     // Conditionally move the length of the heap array
     let flags_opnd = Opnd::mem(VALUE_BITS, array_reg, RUBY_OFFSET_RBASIC_FLAGS);
@@ -7235,7 +7347,12 @@ fn get_array_len(asm: &mut Assembler, array_opnd: Opnd) -> Opnd {
     );
 
     // Select the array length value
-    asm.csel_nz(emb_len_opnd, array_len_opnd)
+    if std::os::raw::c_long::BITS == 64 {
+        asm.csel_nz(emb_len_opnd, array_len_opnd)
+    } else {
+        let len = asm.csel_nz(emb_len_opnd, array_len_opnd);
+        asm.load_sext(len)
+    }
 }
 
 // Generate RARRAY_CONST_PTR (part of RARRAY_AREF)
@@ -8470,7 +8587,10 @@ fn gen_iseq_kw_call(
 
                 // Use the total number of supplied keywords as a size upper bound
                 let keyword_len = unsafe { (*keywords).keyword_len } as usize;
-                let hash = unsafe { rb_hash_new_with_size(keyword_len as u64) };
+                #[cfg(not(windows))]
+                let hash = unsafe { rb_hash_new_with_size(keyword_len as c_ulong) };
+                #[cfg(windows)]
+                let hash = unsafe { rb_hash_new_with_size(keyword_len as c_ulonglong) };
 
                 // Put pairs into the kwrest hash as the mask describes
                 for kwarg_idx in 0..keyword_len {

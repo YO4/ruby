@@ -548,6 +548,15 @@ impl VALUE {
         let k: usize = item.wrapping_add(item.wrapping_add(1));
         VALUE(k)
     }
+
+    pub fn fixnum_from_usize_saturated(item: usize) -> Self {
+        let k: usize = if item <= (RUBY_FIXNUM_MAX as usize) {
+            item.wrapping_add(item.wrapping_add(1))
+        } else {
+            (RUBY_FIXNUM_MAX as usize).wrapping_add((RUBY_FIXNUM_MAX as usize).wrapping_add(1))
+        };
+        VALUE(k)
+    }
 }
 
 impl From<IseqPtr> for VALUE {

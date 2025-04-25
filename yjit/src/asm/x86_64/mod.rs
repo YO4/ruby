@@ -552,8 +552,8 @@ fn write_rm_multi(cb: &mut CodeBlock, op_mem_reg8: u8, op_mem_reg_pref: u8, op_r
     match opnd1 {
         X86Opnd::Reg(reg) => assert_eq!(reg.num_bits, opnd_size),
         X86Opnd::Mem(mem) => assert_eq!(mem.num_bits, opnd_size),
-        X86Opnd::Imm(imm) => assert!(imm.num_bits <= opnd_size),
-        X86Opnd::UImm(uimm) => assert!(uimm.num_bits <= opnd_size),
+        //X86Opnd::Imm(imm) => assert!(imm.num_bits <= opnd_size),
+        //X86Opnd::UImm(uimm) => assert!(uimm.num_bits <= opnd_size),
         _ => ()
     };
 
@@ -802,8 +802,8 @@ pub fn cqo(cb: &mut CodeBlock) {
 
 /// imul - signed integer multiply
 pub fn imul(cb: &mut CodeBlock, opnd0: X86Opnd, opnd1: X86Opnd) {
-    assert!(opnd0.num_bits() == 64);
-    assert!(opnd1.num_bits() == 64);
+    assert!(opnd0.num_bits() == opnd1.num_bits());
+    assert!(opnd0.num_bits() == 64 || opnd0.num_bits() == 32);
     assert!(matches!(opnd0, X86Opnd::Reg(_) | X86Opnd::Mem(_)));
     assert!(matches!(opnd1, X86Opnd::Reg(_) | X86Opnd::Mem(_)));
 
@@ -811,14 +811,14 @@ pub fn imul(cb: &mut CodeBlock, opnd0: X86Opnd, opnd1: X86Opnd) {
         (X86Opnd::Reg(_), X86Opnd::Reg(_) | X86Opnd::Mem(_)) => {
             //REX.W + 0F AF /rIMUL r64, r/m64
             // Quadword register := Quadword register * r/m64.
-            write_rm(cb, false, true, opnd0, opnd1, None, &[0x0F, 0xAF]);
+            write_rm(cb, false, opnd0.num_bits() == 64, opnd0, opnd1, None, &[0x0F, 0xAF]);
         }
 
         // Flip the operands to handle this case. This instruction has weird encoding restrictions.
         (X86Opnd::Mem(_), X86Opnd::Reg(_)) => {
             //REX.W + 0F AF /rIMUL r64, r/m64
             // Quadword register := Quadword register * r/m64.
-            write_rm(cb, false, true, opnd1, opnd0, None, &[0x0F, 0xAF]);
+            write_rm(cb, false, opnd0.num_bits() == 64, opnd1, opnd0, None, &[0x0F, 0xAF]);
         }
 
         _ => unreachable!()
@@ -1047,6 +1047,8 @@ pub fn mov(cb: &mut CodeBlock, dst: X86Opnd, src: X86Opnd) {
         },
         // * + Imm/UImm
         (_, X86Opnd::Imm(_) | X86Opnd::UImm(_)) => unreachable!(),
+        // M + M
+        (X86Opnd::Mem(_), X86Opnd::Mem(_)) => panic!("unknown encoding combo: {dst:?} {src:?}"),
         // * + *
         (_, _) => {
             write_rm_multi(
@@ -1089,10 +1091,11 @@ pub fn movsx(cb: &mut CodeBlock, dst: X86Opnd, src: X86Opnd) {
         let dst_num_bits = dst.num_bits();
         assert!(src_num_bits < dst_num_bits);
 
+        let dst_reg = X86Opnd::Reg(_dst_reg.with_num_bits(src_num_bits));
         match src_num_bits {
-            8 => write_rm(cb, dst_num_bits == 16, dst_num_bits == 64, dst, src, None, &[0x0f, 0xbe]),
-            16 => write_rm(cb, dst_num_bits == 16, dst_num_bits == 64, dst, src, None, &[0x0f, 0xbf]),
-            32 => write_rm(cb, false, true, dst, src, None, &[0x63]),
+            8 => write_rm(cb, dst_num_bits == 16, dst_num_bits == 64, dst_reg, src, None, &[0x0f, 0xbe]),
+            16 => write_rm(cb, dst_num_bits == 16, dst_num_bits == 64, dst_reg, src, None, &[0x0f, 0xbf]),
+            32 => write_rm(cb, false, true, dst_reg, src, None, &[0x63]),
             _ => unreachable!()
         };
     } else {

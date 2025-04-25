@@ -748,7 +748,7 @@ fn rb_yjit_gen_stats_dict(key: VALUE) -> VALUE {
 
     macro_rules! set_stat_usize {
         ($hash:ident, $name:expr, $value:expr) => {
-            set_stat!($hash, $name, VALUE::fixnum_from_usize($value));
+            set_stat!($hash, $name, VALUE::fixnum_from_usize_saturated($value));
         }
     }
 
@@ -814,7 +814,7 @@ fn rb_yjit_gen_stats_dict(key: VALUE) -> VALUE {
 
             // Put counter into hash
             let key = &counter.get_name();
-            let value = VALUE::fixnum_from_usize(counter_val as usize);
+            let value = VALUE::fixnum_from_usize_saturated(counter_val as usize);
             unsafe { set_stat!(hash, key, value); }
         }
 
@@ -895,7 +895,7 @@ fn rb_yjit_gen_stats_dict(key: VALUE) -> VALUE {
                 // Add the pairs to the dict
                 for (name, call_count) in pairs {
                     let key = rust_str_to_sym(name);
-                    let value = VALUE::fixnum_from_usize(call_count as usize);
+                    let value = VALUE::fixnum_from_usize_saturated(call_count as usize);
                     unsafe { rb_hash_aset(calls_hash, key, value); }
                 }
             }

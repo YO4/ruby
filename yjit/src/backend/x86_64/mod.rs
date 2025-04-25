@@ -479,7 +479,7 @@ impl Assembler
                 },
                 _ => {
                     if insn.out_opnd().is_some() {
-                        let out_num_bits = Opnd::match_num_bits_iter(insn.opnd_iter());
+                        let out_num_bits = insn.out_opnd().unwrap().num_bits().unwrap();
                         let out = insn.out_opnd_mut().unwrap();
                         *out = asm.next_opnd_out(out_num_bits);
                     }
@@ -606,6 +606,17 @@ impl Assembler
                     // Add a null-terminator byte for safety (in case we pass
                     // this to C code)
                     cb.write_byte(0);
+                    // 1byte opcodes(NOP) to prevent disasm from becoming confused.
+                    cb.write_byte(0x90);
+                    cb.write_byte(0x90);
+                    cb.write_byte(0x90);
+                    cb.write_byte(0x90);
+                    cb.write_byte(0x90);
+                    cb.write_byte(0x90);
+                    cb.write_byte(0x90);
+                    cb.write_byte(0x90);
+                    cb.write_byte(0x90);
+                    cb.write_byte(0x90);
                 },
 
                 // Set up RBP to work with frame pointer unwinding
