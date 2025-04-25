@@ -105,7 +105,7 @@ TOP_BUILD_DIR=@abs_top_builddir@
 YJIT_SUPPORT=@YJIT_SUPPORT@
 YJIT_LIBS=@YJIT_LIBS@
 YJIT_OBJ=@YJIT_OBJ@
-YJIT_LIBOBJ = $(YJIT_LIBS:.a=.@OBJEXT@)
+YJIT_LIBOBJ=@YJIT_LIBOBJ@
 ZJIT_SUPPORT=@ZJIT_SUPPORT@
 ZJIT_LIBS=@ZJIT_LIBS@
 ZJIT_OBJ=@ZJIT_OBJ@
@@ -301,7 +301,7 @@ all:
 miniruby$(EXEEXT):
 		@-if test -f $@; then $(MV) -f $@ $@.old; $(RM) $@.old; fi
 		$(ECHO) linking $@
-		$(Q) $(PURIFY) $(CC) $(EXE_LDFLAGS) $(XLDFLAGS) $(NORMALMAINOBJ) $(MINIOBJS) $(COMMONOBJS) $(MAINLIBS) $(OUTFLAG)$@
+		$(Q) $(PURIFY) $(CC) $(EXE_LDFLAGS) $(XLDFLAGS) $(NORMALMAINOBJ) $(MINIOBJS) $(COMMONOBJS) $(ALTLIBS) $(MAINLIBS) $(OUTFLAG)$@
 		$(Q) $(POSTLINK)
 
 $(PROGRAM):
@@ -321,6 +321,9 @@ $(LIBRUBY_A):
 		@$(RM) $@
 		@-[ -z "$(EXTSTATIC)" ] || $(PRE_LIBRUBY_UPDATE)
 		$(ECHO) linking static-library $@
+		$(Q) if test "x$(YJIT_LIBS)" != "x" -a "x$(YJIT_LIBOBJ)" = "x"; then \
+		    $(CP) $(YJIT_LIBS) $@; \
+		fi
 		$(Q) $(AR) $(ARFLAGS) $@ $(LIBRUBY_A_OBJS) $(INITOBJS)
 		@-$(RANLIB) $@ 2> /dev/null || true
 
@@ -332,7 +335,7 @@ verify-static-library: $(LIBRUBY_A)
 $(LIBRUBY_SO):
 		@-[ -n "$(EXTSTATIC)" ] || $(PRE_LIBRUBY_UPDATE)
 		$(ECHO) linking shared-library $@
-		$(Q) $(LDSHARED) $(DLDFLAGS) $(OBJS) $(DLDOBJS) $(SOLIBS) $(EXTSOLIBS) $(OUTFLAG)$@
+		$(Q) $(LDSHARED) $(DLDFLAGS) $(OBJS) $(DLDOBJS) $(ALTLIBS) $(SOLIBS) $(EXTSOLIBS) $(OUTFLAG)$@
 		-$(Q) $(OBJCOPY) -w -L '$(SYMBOL_PREFIX)Init_*' -L '$(SYMBOL_PREFIX)ruby_static_id_*' \
 			-L '$(SYMBOL_PREFIX)*_threadptr_*' -L '$(SYMBOL_PREFIX)*_ec_*' $@
 		$(Q) $(POSTLINK)

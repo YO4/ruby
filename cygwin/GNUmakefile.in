@@ -43,6 +43,13 @@ endif
 
 WPROGRAM = $(RUBYW_INSTALL_NAME)$(EXEEXT)
 
+ifneq ($(YJIT_LIBS),)
+ifeq ($(YJIT_YJIT_LIBOBJ),)
+  # static library for miniruby / LIBRUBY_SO
+  ALTLIBS = $(YJIT_LIBS)
+endif
+endif
+
 include $(srcdir)/template/GNUmakefile.in
 
 SOLIBS := $(DLL_BASE_NAME).res.$(OBJEXT) $(SOLIBS)

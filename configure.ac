@@ -3969,7 +3969,11 @@ AS_CASE(["${YJIT_SUPPORT}"],
     YJIT_OBJ='yjit.$(OBJEXT)'
     AS_CASE(["$target_os"],
       [msys*|mingw*], [
+        YJIT_LIBOBJ=
         LIBS="-lntdll -luserenv $LIBS"
+        ],
+      [
+        YJIT_LIBOBJ='$(YJIT_LIBS:.a=.$(OBJEXT))'
         ])
     AS_IF([test x"$YJIT_SUPPORT" != "xyes" ], [
         AC_DEFINE_UNQUOTED(YJIT_SUPPORT, [$YJIT_SUPPORT])
@@ -4028,6 +4032,7 @@ AC_SUBST(CARGO_BUILD_ARGS)dnl for selecting Rust build profiles
 AC_SUBST(ZJIT_CARGO_BUILD_ARGS)dnl for selecting Rust build profiles
 AC_SUBST(YJIT_LIBS)dnl for optionally building the Rust parts of YJIT
 AC_SUBST(YJIT_OBJ)dnl for optionally building the C parts of YJIT
+AC_SUBST(YJIT_LIBOBJ)dnl for optionally building the C parts of YJIT
 AC_SUBST(ZJIT_SUPPORT)dnl what flavor of ZJIT the Ruby build includes
 AC_SUBST(ZJIT_LIBS)dnl for optionally building the Rust parts of YJIT
 AC_SUBST(ZJIT_OBJ)dnl for optionally building the C parts of YJIT
