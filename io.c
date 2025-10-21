@@ -169,7 +169,7 @@ off_t __syscall(quad_t number, ...);
 #endif
 
 #define IO_RBUF_CAPA_MIN  8192
-#define IO_CBUF_CAPA_MIN  (128*1024)
+#define IO_CBUF_CAPA_MIN  (8*1024)
 #define IO_RBUF_CAPA_FOR(fptr) (NEED_READCONV(fptr) ? IO_CBUF_CAPA_MIN : IO_RBUF_CAPA_MIN)
 #define IO_WBUF_CAPA_MIN  8192
 
@@ -595,7 +595,7 @@ rb_sys_fail_on_write(rb_io_t *fptr)
  * conversion IO process and universal newline decorator by default.
  */
 //#define NEED_READCONV(fptr) ((fptr)->encs.enc2 != NULL || ((fptr)->encs.ecflags & ECONV_NEWLINE_DECORATOR_READ_MASK))
-#define NEED_READCONV(fptr) ((fptr)->encs.enc2 != NULL || NEED_NEWLINE_DECORATOR_ON_READ(fptr))
+#define NEED_READCONV(fptr) ((fptr)->encs.enc2 != NULL || ((fptr)->encs.ecflags & (ECONV_NEWLINE_DECORATOR_READ_MASK | ECONV_CRLF_NEWLINE_DECORATOR)))
 #define USE_UNIVERSAL_NEWLINE_FASTPATH_ON_READ(fptr) ((fptr)->encs.enc2 == NULL && \
     ((fptr)->encs.ecflags & ECONV_NEWLINE_DECORATOR_READ_MASK))
 #define USE_CRLF_NEWLINE_FASTPATH_ON_READ(fptr) ((fptr)->encs.enc2 == NULL && \
@@ -653,7 +653,7 @@ set_binary_mode_with_seek_cur(rb_io_t *fptr)
 #else
 /* Unix */
 # define DEFAULT_TEXTMODE 0
-#define NEED_READCONV(fptr) ((fptr)->encs.enc2 != NULL || NEED_NEWLINE_DECORATOR_ON_READ(fptr))
+#define NEED_READCONV(fptr) ((fptr)->encs.enc2 != NULL || ((fptr)->encs.ecflags & ECONV_NEWLINE_DECORATOR_READ_MASK))
 #define USE_UNIVERSAL_NEWLINE_FASTPATH_ON_READ(fptr) ((fptr)->encs.enc2 == NULL && \
     ((fptr)->encs.ecflags & ECONV_NEWLINE_DECORATOR_READ_MASK) == ECONV_UNIVERSAL_NEWLINE_DECORATOR)
 #define USE_CRLF_NEWLINE_FASTPATH_ON_READ(fptr) false
@@ -2608,7 +2608,7 @@ io_fillbuf(rb_io_t *fptr)
         fptr->rbuf.len = 0;
         fptr->rbuf.capa = IO_RBUF_CAPA_FOR(fptr);
         fptr->rbuf.ptr = ALLOC_N(char, fptr->rbuf.capa);
-#ifdef _WIN32
+#if defined(_WIN32) && 0
         fptr->rbuf.capa--;
 #endif
     }
@@ -2694,7 +2694,26 @@ rb_io_eof(VALUE io)
         }
     }
 #endif
-    return RBOOL(io_fillbuf(fptr) < 0);
+    if (NEED_READCONV(fptr) &&
+        USE_CRLF_NEWLINE_FASTPATH_ON_READ(fptr)) {
+        if (fptr->cbuf.ptr && READ_CHAR_PENDING(fptr)) {
+            if (*READ_CHAR_PENDING_PTR(fptr) == '\x1A') {
+                return Qtrue;
+            }
+        }
+        else {
+            if (io_fillbuf(fptr) < 0) {
+                return Qtrue;
+            }
+            if (*READ_DATA_PENDING_PTR(fptr) == '\x1A') {
+                return Qtrue;
+            }
+        }
+        return Qfalse;
+    }
+    else {
+        return RBOOL(io_fillbuf(fptr) < 0);
+    }
 }
 
 /*
@@ -3008,8 +3027,10 @@ rb_io_inspect(VALUE obj)
 //    rb_str_catf(result, " ecflags %08x", fptr->encs.ecflags);
 //    rb_str_catf(result, " readconv %+"PRIsVALUE, (VALUE)(READCONV_IS_REAL_ECONV(fptr->readconv) ? NULL : fptr->readconv));
 //    rb_str_catf(result, " readconv %+"PRIsVALUE, (VALUE)(fptr->readconv));
-//    rb_str_catf(result, "  %lld", (VALUE)(READCONV_IS_REAL_ECONV(fptr->readconv)));
-//    rb_str_catf(result, "  %s", rb_enc_asciicompat(io_read_encoding(fptr)) ? "compat" : "not compat");
+//    rb_str_catf(result, " %lld", (VALUE)(READCONV_IS_REAL_ECONV(fptr->readconv)));
+//    rb_str_catf(result, " %s", rb_enc_asciicompat(io_read_encoding(fptr)) ? "compat" : "not compat");
+//    rb_str_catf(result, " fd:%d", fptr->fd);
+//    if (fptr->fd > 0) rb_str_catf(result, " %s", rb_w32_fd_is_text(fptr->fd) ? "O_TEXT" : "O_BINARY");
     return rb_str_cat2(result, ">");
 }
 
@@ -3208,7 +3229,7 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
     if (fptr->rbuf.len == 0) {
         READ_CHECK(fptr);
         if (io_fillbuf(fptr) < 0) {
-            if (pending >= 0) {
+            if (pending >= 0 && pending != '\x1A') {
                 *dp = (unsigned char)pending;
                 fptr->cbuf.len++;
                 return MORE_CHAR_SUSPENDED;
@@ -3219,6 +3240,9 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
     ss = sp = (const unsigned char *)fptr->rbuf.ptr + fptr->rbuf.off;
     se = sp + fptr->rbuf.len;
     if (pending >= 0) {
+        if (pending == '\x1A') {
+            return MORE_CHAR_FINISHED;
+        }
         if (pending == '\r' && *sp == '\n') {
             *dp++ = *sp++;
         }
@@ -3227,6 +3251,9 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
         }
     }
     else {
+        if (*sp == '\x1A') {
+            return MORE_CHAR_FINISHED;
+        }
         if (fptr->rbuf.len > 1 && *sp == '\r' && *(sp + 1) == '\n') {
             *dp++ = '\n';
             sp += 2;
@@ -3240,6 +3267,9 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
     }
 
     while (sp + 1 < se && dp < de) {
+        if (*sp == '\x1A') {
+            goto end;
+        }
         if (*sp == '\r' && *(sp + 1) == '\n') {
             *dp++ = '\n';
             sp += 2;
@@ -3365,7 +3395,13 @@ fill_cbuf(rb_io_t *fptr, int ec_flags)
         fptr->cbuf.off = 0;
         fptr->cbuf.off_unget = 0;
     }
-    else if (fptr->cbuf.off + fptr->cbuf.len == fptr->cbuf.capa) {
+
+    if (fptr->readconv == READCONV_CRLF_NEWLINE_ONLY)
+        return fill_cbuf_with_crlf_newline(fptr, ec_flags);
+    if (fptr->readconv == READCONV_UNIVERSAL_NEWLINE_ONLY)
+        return fill_cbuf_with_universal_newline(fptr, ec_flags);
+
+    if (fptr->cbuf.len && fptr->cbuf.off + fptr->cbuf.len == fptr->cbuf.capa) {
         memmove(fptr->cbuf.ptr, fptr->cbuf.ptr+fptr->cbuf.off, fptr->cbuf.len);
         if (fptr->cbuf.off < fptr->cbuf.off_unget)
             fptr->cbuf.off_unget -= fptr->cbuf.off;
@@ -3373,12 +3409,6 @@ fill_cbuf(rb_io_t *fptr, int ec_flags)
             fptr->cbuf.off_unget = 0;
         fptr->cbuf.off = 0;
     }
-
-    if (fptr->readconv == READCONV_CRLF_NEWLINE_ONLY)
-        return fill_cbuf_with_crlf_newline(fptr, ec_flags);
-    if (fptr->readconv == READCONV_UNIVERSAL_NEWLINE_ONLY)
-        return fill_cbuf_with_universal_newline(fptr, ec_flags);
-
     cbuf_len0 = fptr->cbuf.len;
 
     while (1) {
@@ -5089,16 +5119,14 @@ rb_io_each_codepoint(VALUE io)
     if (NEED_READCONV(fptr)) {
 //        SET_BINARY_MODE(fptr);
         r = 1;		/* no invalid char yet */
+        enc = io_read_encoding(fptr);
         for (;;) {
             make_readconv(fptr, 0);
             for (;;) {
                 if (fptr->cbuf.len) {
-                    if (fptr->encs.enc)
-                        r = rb_enc_precise_mbclen(fptr->cbuf.ptr+fptr->cbuf.off,
-                                                  fptr->cbuf.ptr+fptr->cbuf.off+fptr->cbuf.len,
-                                                  fptr->encs.enc);
-                    else
-                        r = ONIGENC_CONSTRUCT_MBCLEN_CHARFOUND(1);
+                    r = rb_enc_precise_mbclen(fptr->cbuf.ptr+fptr->cbuf.off,
+                                              fptr->cbuf.ptr+fptr->cbuf.off+fptr->cbuf.len,
+                                              enc);
                     if (!MBCLEN_NEEDMORE_P(r))
                         break;
                     if (fptr->cbuf.len == fptr->cbuf.capa) {
@@ -5108,25 +5136,18 @@ rb_io_each_codepoint(VALUE io)
                 if (more_char(fptr) == MORE_CHAR_FINISHED) {
                     clear_readconv(fptr);
                     if (!MBCLEN_CHARFOUND_P(r)) {
-                        enc = fptr->encs.enc;
                         goto invalid;
                     }
                     return io;
                 }
             }
             if (MBCLEN_INVALID_P(r)) {
-                enc = fptr->encs.enc;
                 goto invalid;
             }
             n = MBCLEN_CHARFOUND_LEN(r);
-            if (fptr->encs.enc) {
-                c = rb_enc_codepoint(fptr->cbuf.ptr+fptr->cbuf.off,
-                                     fptr->cbuf.ptr+fptr->cbuf.off+fptr->cbuf.len,
-                                     fptr->encs.enc);
-            }
-            else {
-                c = (unsigned char)fptr->cbuf.ptr[fptr->cbuf.off];
-            }
+            c = rb_enc_codepoint(fptr->cbuf.ptr+fptr->cbuf.off,
+                                 fptr->cbuf.ptr+fptr->cbuf.off+fptr->cbuf.len,
+                                 enc);
             fptr->cbuf.off += n;
             fptr->cbuf.len -= n;
             rb_yield(UINT2NUM(c));
@@ -9539,6 +9560,7 @@ prep_io(int fd, enum rb_io_mode fmode, VALUE klass, const char *path)
         MODE_BTMODE(TEXTMODE_NEWLINE_DECORATOR_ON_WRITE,
             0, TEXTMODE_NEWLINE_DECORATOR_ON_WRITE) : 0;
 #endif
+    if (!(fmode & FMODE_BINMODE)) fmode |= DEFAULT_TEXTMODE;
     SET_UNIVERSAL_NEWLINE_DECORATOR_IF_ENC2(convconfig.enc2, convconfig.ecflags);
     convconfig.ecopts = Qnil;
 
