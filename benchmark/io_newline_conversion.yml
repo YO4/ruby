@@ -1,0 +1,80 @@
+prelude: |
+  require "tempfile"
+  str1k = "a" * 1024
+  str26 = (?a..?z).to_a.join
+  $no_newline_tempfile = Tempfile.open("no_lf") do |f|
+    900.times { f.write str1k }
+    f
+  end
+  $sparse_newline_tempfile = Tempfile.open("sparse_lf") do |f|
+    f.set_encoding("ascii-8bit", crlf_newline: true)
+    12500.times { f.puts str26 }
+    f
+  end
+  $dense_newline_tempfile = Tempfile.open("dense_lf") do |f|
+    f.set_encoding("ascii-8bit", crlf_newline: true)
+    23000.times { f.puts "" }
+    f
+  end
+  $no_newline_tempfile.open
+  $sparse_newline_tempfile.open
+  $dense_newline_tempfile.open
+  $no_newline_binarymode = IO.for_fd($no_newline_tempfile.fileno, "rb", autoclose: false)
+  $no_newline_textmode = IO.for_fd($no_newline_tempfile.fileno, "rt", autoclose: false)
+  $no_newline_defaultmode = IO.for_fd($no_newline_tempfile.fileno, "r", autoclose: false)
+  $sparse_newline_binarymode = IO.for_fd($sparse_newline_tempfile.fileno, "rb", autoclose: false)
+  $sparse_newline_textmode = IO.for_fd($sparse_newline_tempfile.fileno, "rt", autoclose: false)
+  $sparse_newline_defaultmode = IO.for_fd($sparse_newline_tempfile.fileno, "r", autoclose: false)
+  $dense_newline_binarymode = IO.for_fd($dense_newline_tempfile.fileno, "rb", autoclose: false)
+  $dense_newline_textmode = IO.for_fd($dense_newline_tempfile.fileno, "rt", autoclose: false)
+  $dense_newline_defaultmode = IO.for_fd($dense_newline_tempfile.fileno, "r", autoclose: false)
+
+benchmark:
+  - name: read_binary_1
+    script: |
+      $no_newline_binarymode.rewind
+      $no_newline_binarymode.read
+  - name: read_text_1
+    script: |
+      $no_newline_textmode.rewind
+      $no_newline_textmode.read
+  - name: read_default_1
+    script: |
+      $no_newline_defaultmode.rewind
+      $no_newline_defaultmode.read
+  - name: readlines_binary_1
+    script: |
+      $no_newline_binarymode.rewind
+      $no_newline_binarymode.readlines
+  - name: readlines_text_1
+    script: |
+      $no_newline_textmode.rewind
+      $no_newline_textmode.readlines
+  - name: readlines_default_1
+    script: |
+      $no_newline_defaultmode.rewind
+      $no_newline_defaultmode.readlines
+  - name: readlines_binary_2
+    script: |
+      $sparse_newline_binarymode.rewind
+      $sparse_newline_binarymode.readlines
+  - name: readlines_text_2
+    script: |
+      $sparse_newline_textmode.rewind
+      $sparse_newline_textmode.readlines
+  - name: readlines_default_2
+    script: |
+      $sparse_newline_defaultmode.rewind
+      $sparse_newline_defaultmode.readlines
+  - name: readlines_binary_3
+    script: |
+      $dense_newline_binarymode.rewind
+      $dense_newline_binarymode.readlines
+  - name: readlines_text_3
+    script: |
+      $dense_newline_textmode.rewind
+      $dense_newline_textmode.readlines
+  - name: readlines_default_3
+    script: |
+      $dense_newline_defaultmode.rewind
+      $dense_newline_defaultmode.readlines
