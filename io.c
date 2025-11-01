@@ -6458,24 +6458,15 @@ rb_io_binmode(VALUE io)
 static void
 io_ascii8bit_binmode(rb_io_t *fptr)
 {
-    if (fptr->readconv) {
-        if (READCONV_IS_REAL_ECONV(fptr->readconv))
-            rb_econv_close(fptr->readconv);
-        fptr->readconv = NULL;
-    }
-    if (fptr->writeconv) {
-        rb_econv_close(fptr->writeconv);
-        fptr->writeconv = NULL;
-    }
+    SET_BINARY_MODE_WITH_SEEK_CUR(fptr);
+    clear_codeconv(fptr);
     fptr->mode |= FMODE_BINMODE;
     fptr->mode &= ~FMODE_TEXTMODE;
-    SET_BINARY_MODE_WITH_SEEK_CUR(fptr);
 
     fptr->encs.enc = rb_ascii8bit_encoding();
     fptr->encs.enc2 = NULL;
     fptr->encs.ecflags = 0;
     fptr->encs.ecopts = Qnil;
-    clear_codeconv(fptr);
 }
 
 VALUE
