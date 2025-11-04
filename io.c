@@ -5064,16 +5064,14 @@ rb_io_each_codepoint(VALUE io)
     READ_CHECK(fptr);
     if (NEED_READCONV(fptr)) {
         r = 1;		/* no invalid char yet */
+        enc = io_read_encoding(fptr);
         for (;;) {
             make_readconv(fptr, 0);
             for (;;) {
                 if (fptr->cbuf.len) {
-                    if (fptr->encs.enc)
-                        r = rb_enc_precise_mbclen(fptr->cbuf.ptr+fptr->cbuf.off,
-                                                  fptr->cbuf.ptr+fptr->cbuf.off+fptr->cbuf.len,
-                                                  fptr->encs.enc);
-                    else
-                        r = ONIGENC_CONSTRUCT_MBCLEN_CHARFOUND(1);
+                    r = rb_enc_precise_mbclen(fptr->cbuf.ptr+fptr->cbuf.off,
+                                              fptr->cbuf.ptr+fptr->cbuf.off+fptr->cbuf.len,
+                                              enc);
                     if (!MBCLEN_NEEDMORE_P(r))
                         break;
                     if (fptr->cbuf.len == fptr->cbuf.capa) {
@@ -5083,25 +5081,18 @@ rb_io_each_codepoint(VALUE io)
                 if (more_char(fptr) == MORE_CHAR_FINISHED) {
                     clear_readconv(fptr);
                     if (!MBCLEN_CHARFOUND_P(r)) {
-                        enc = fptr->encs.enc;
                         goto invalid;
                     }
                     return io;
                 }
             }
             if (MBCLEN_INVALID_P(r)) {
-                enc = fptr->encs.enc;
                 goto invalid;
             }
             n = MBCLEN_CHARFOUND_LEN(r);
-            if (fptr->encs.enc) {
-                c = rb_enc_codepoint(fptr->cbuf.ptr+fptr->cbuf.off,
-                                     fptr->cbuf.ptr+fptr->cbuf.off+fptr->cbuf.len,
-                                     fptr->encs.enc);
-            }
-            else {
-                c = (unsigned char)fptr->cbuf.ptr[fptr->cbuf.off];
-            }
+            c = rb_enc_codepoint(fptr->cbuf.ptr+fptr->cbuf.off,
+                                 fptr->cbuf.ptr+fptr->cbuf.off+fptr->cbuf.len,
+                                 enc);
             fptr->cbuf.off += n;
             fptr->cbuf.len -= n;
             rb_yield(UINT2NUM(c));
