@@ -9501,6 +9501,7 @@ prep_io(int fd, enum rb_io_mode fmode, VALUE klass, const char *path)
         MODE_BTMODE(TEXTMODE_NEWLINE_DECORATOR_ON_WRITE,
             0, TEXTMODE_NEWLINE_DECORATOR_ON_WRITE) : 0;
 #endif
+    if (!(fmode & FMODE_BINMODE)) fmode |= DEFAULT_TEXTMODE;
     SET_UNIVERSAL_NEWLINE_DECORATOR_IF_ENC2(convconfig.enc2, convconfig.ecflags);
     convconfig.ecopts = Qnil;
 
