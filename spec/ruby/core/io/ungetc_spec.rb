@@ -82,6 +82,9 @@ describe "IO#ungetc" do
   end
 
   it "adjusts the stream position" do
+    @io.set_encoding(
+      'utf-8', universal_newline: false
+    )
     @io.pos.should == 0
 
     # read one char
