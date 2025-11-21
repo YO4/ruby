@@ -7235,10 +7235,6 @@ rb_w32_read_internal(int fd, void *buf, size_t size, rb_off_t *offset)
         return -1;
     }
 
-    if (!offset && _osfile(fd) & FTEXT) {
-        return _read(fd, buf, size);
-    }
-
     rb_acrt_lowio_lock_fh(fd);
 
     if (!size || _osfile(fd) & FEOFLAG) {
