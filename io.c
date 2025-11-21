@@ -607,8 +607,7 @@ rb_sys_fail_on_write(rb_io_t *fptr)
 
 #define NEED_NEWLINE_DECORATOR_ON_READ_CHECK(fptr) do {\
     if (NEED_NEWLINE_DECORATOR_ON_READ(fptr)) {\
-        if (((fptr)->mode & FMODE_READABLE) &&\
-            !((fptr)->encs.ecflags & ECONV_NEWLINE_DECORATOR_MASK)) {\
+        if (!((fptr)->encs.ecflags & ECONV_NEWLINE_DECORATOR_MASK)) {\
             setmode((fptr)->fd, O_BINARY);\
         }\
         else {\
@@ -622,6 +621,8 @@ rb_sys_fail_on_write(rb_io_t *fptr)
         (ecflags) |= ECONV_UNIVERSAL_NEWLINE_DECORATOR;\
     }\
 } while(0)
+
+# define CTRLZ '\x1A'
 
 /*
  * IO unread with taking care of removed '\r' in text mode.
@@ -2696,6 +2697,7 @@ VALUE
 rb_io_eof(VALUE io)
 {
     rb_io_t *fptr;
+    int r;
 
     GetOpenFile(io, fptr);
     rb_io_check_char_readable(fptr);
@@ -2703,12 +2705,15 @@ rb_io_eof(VALUE io)
     if (READ_CHAR_PENDING(fptr)) return Qfalse;
     if (READ_DATA_PENDING(fptr)) return Qfalse;
     READ_CHECK(fptr);
+    r = io_fillbuf(fptr);
 #if RUBY_CRLF_ENVIRONMENT
-    if (!NEED_READCONV(fptr) && NEED_NEWLINE_DECORATOR_ON_READ(fptr)) {
-        return RBOOL(eof(fptr->fd));
+    if (!NEED_READCONV(fptr)) {
+        if ((fptr)->encs.ecflags & ECONV_NEWLINE_DECORATOR_MASK) {
+            return RBOOL(r < 0 || READ_DATA_PENDING_PTR(fptr)[0] == CTRLZ);
+        }
     }
 #endif
-    return RBOOL(io_fillbuf(fptr) < 0);
+    return RBOOL(r < 0);
 }
 
 /*
