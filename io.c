@@ -503,7 +503,54 @@ rb_cloexec_fcntl_dupfd(int fd, int minfd)
 
 #define GetWriteIO(io) rb_io_get_write_io(io)
 
+#if defined(RUBY_TEST_CRLF_ENVIRONMENT) || defined(_WIN32)
+# define RUBY_CRLF_ENVIRONMENT 1
+#else
+# define RUBY_CRLF_ENVIRONMENT 0
+#endif
+
+#define NEED_NEWLINE_DECORATOR_ON_READ(fptr) ((fptr)->mode & FMODE_TEXTMODE)
+#define NEED_NEWLINE_DECORATOR_ON_WRITE(fptr) ((fptr)->mode & FMODE_TEXTMODE)
+
+#if RUBY_CRLF_ENVIRONMENT
+/* Windows */
+# define DEFAULT_TEXTMODE FMODE_TEXTMODE
+# define TEXTMODE_NEWLINE_DECORATOR_ON_WRITE ECONV_CRLF_NEWLINE_DECORATOR
+/*
+ * CRLF newline is set as default newline decorator.
+ * If only CRLF newline conversion is needed, we use specific conversion path.
+ * If encoding conversion is needed or a user sets text mode, we use encoding
+ * conversion IO process and universal newline decorator by default.
+ */
+#define NEED_READCONV(fptr) ((fptr)->encs.enc2 != NULL || (fptr)->encs.ecflags & ~ECONV_CRLF_NEWLINE_DECORATOR)
+#define WRITECONV_MASK ( \
+    (ECONV_DECORATOR_MASK & ~ECONV_CRLF_NEWLINE_DECORATOR)|\
+    ECONV_STATEFUL_DECORATOR_MASK|\
+    0)
+#define NEED_WRITECONV(fptr) ( \
+  ((fptr)->encs.enc != NULL && (fptr)->encs.enc != rb_ascii8bit_encoding()) || \
+  ((fptr)->encs.ecflags & WRITECONV_MASK) || \
+  0)
+#define NEED_CRLF_EOF_CONV(fptr) ((fptr)->encs.ecflags & ECONV_NEWLINE_DECORATOR_MASK)
+#define CTRLZ '\x1A'
+
+#else
+/* Unix */
+# define DEFAULT_TEXTMODE 0
+#define NEED_READCONV(fptr) ((fptr)->encs.enc2 != NULL || NEED_NEWLINE_DECORATOR_ON_READ(fptr))
+#define NEED_WRITECONV(fptr) ( \
+  ((fptr)->encs.enc != NULL && (fptr)->encs.enc != rb_ascii8bit_encoding()) || \
+  NEED_NEWLINE_DECORATOR_ON_WRITE(fptr) ||                        \
+  ((fptr)->encs.ecflags & (ECONV_DECORATOR_MASK|ECONV_STATEFUL_DECORATOR_MASK)) || \
+  0)
+#endif
+
+#if RUBY_CRLF_ENVIRONMENT
+#define READ_DATA_PENDING(fptr) ((fptr)->rbuf.len && \
+  (NEED_READCONV(fptr) || !NEED_CRLF_EOF_CONV(fptr) || (fptr)->rbuf.ptr[(fptr)->rbuf.off] != CTRLZ))
+#else
 #define READ_DATA_PENDING(fptr) ((fptr)->rbuf.len)
+#endif
 #define READ_DATA_PENDING_COUNT(fptr) ((fptr)->rbuf.len)
 #define READ_DATA_PENDING_PTR(fptr) ((fptr)->rbuf.ptr+(fptr)->rbuf.off)
 #define READ_DATA_BUFFERED(fptr) READ_DATA_PENDING(fptr)
@@ -575,53 +622,18 @@ rb_sys_fail_on_write(rb_io_t *fptr)
     rb_exc_raise(errinfo);
 }
 
-#define NEED_NEWLINE_DECORATOR_ON_READ(fptr) ((fptr)->mode & FMODE_TEXTMODE)
-#define NEED_NEWLINE_DECORATOR_ON_WRITE(fptr) ((fptr)->mode & FMODE_TEXTMODE)
-#if defined(RUBY_TEST_CRLF_ENVIRONMENT) || defined(_WIN32)
-# define RUBY_CRLF_ENVIRONMENT 1
-#else
-# define RUBY_CRLF_ENVIRONMENT 0
-#endif
-
 #if RUBY_CRLF_ENVIRONMENT
-/* Windows */
-# define DEFAULT_TEXTMODE FMODE_TEXTMODE
-# define TEXTMODE_NEWLINE_DECORATOR_ON_WRITE ECONV_CRLF_NEWLINE_DECORATOR
-/*
- * CRLF newline is set as default newline decorator.
- * If only CRLF newline conversion is needed, we use binary IO process
- * with OS's text mode for IO performance improvement.
- * If encoding conversion is needed or a user sets text mode, we use encoding
- * conversion IO process and universal newline decorator by default.
- */
-#define NEED_READCONV(fptr) ((fptr)->encs.enc2 != NULL || (fptr)->encs.ecflags & ~ECONV_CRLF_NEWLINE_DECORATOR)
-#define WRITECONV_MASK ( \
-    (ECONV_DECORATOR_MASK & ~ECONV_CRLF_NEWLINE_DECORATOR)|\
-    ECONV_STATEFUL_DECORATOR_MASK|\
-    0)
-#define NEED_WRITECONV(fptr) ( \
-  ((fptr)->encs.enc != NULL && (fptr)->encs.enc != rb_ascii8bit_encoding()) || \
-  ((fptr)->encs.ecflags & WRITECONV_MASK) || \
-  0)
 #define SET_BINARY_MODE(fptr) setmode((fptr)->fd, O_BINARY)
 
-#define NEED_NEWLINE_DECORATOR_ON_READ_CHECK(fptr) do {\
-    if (NEED_NEWLINE_DECORATOR_ON_READ(fptr)) {\
-        if (((fptr)->mode & FMODE_READABLE) &&\
-            !((fptr)->encs.ecflags & ECONV_NEWLINE_DECORATOR_MASK)) {\
-            setmode((fptr)->fd, O_BINARY);\
-        }\
-        else {\
-            setmode((fptr)->fd, O_TEXT);\
-        }\
-    }\
-} while(0)
+#define NEED_NEWLINE_DECORATOR_ON_READ_CHECK(fptr) setmode((fptr)->fd, O_BINARY)
 
 #define SET_UNIVERSAL_NEWLINE_DECORATOR_IF_ENC2(enc2, ecflags) do {\
     if ((enc2) && ((ecflags) & ECONV_DEFAULT_NEWLINE_DECORATOR)) {\
         (ecflags) |= ECONV_UNIVERSAL_NEWLINE_DECORATOR;\
     }\
 } while(0)
+
+# define CTRLZ '\x1A'
 
 /*
  * IO unread with taking care of removed '\r' in text mode.
@@ -727,14 +739,6 @@ set_binary_mode_with_seek_cur(rb_io_t *fptr)
 #define SET_BINARY_MODE_WITH_SEEK_CUR(fptr) set_binary_mode_with_seek_cur(fptr)
 
 #else
-/* Unix */
-# define DEFAULT_TEXTMODE 0
-#define NEED_READCONV(fptr) ((fptr)->encs.enc2 != NULL || NEED_NEWLINE_DECORATOR_ON_READ(fptr))
-#define NEED_WRITECONV(fptr) ( \
-  ((fptr)->encs.enc != NULL && (fptr)->encs.enc != rb_ascii8bit_encoding()) || \
-  NEED_NEWLINE_DECORATOR_ON_WRITE(fptr) ||                        \
-  ((fptr)->encs.ecflags & (ECONV_DECORATOR_MASK|ECONV_STATEFUL_DECORATOR_MASK)) || \
-  0)
 #define SET_BINARY_MODE(fptr) (void)(fptr)
 #define NEED_NEWLINE_DECORATOR_ON_READ_CHECK(fptr) (void)(fptr)
 #define SET_UNIVERSAL_NEWLINE_DECORATOR_IF_ENC2(enc2, ecflags) ((void)(enc2), (void)(ecflags))
@@ -3057,7 +3061,7 @@ io_bufread(char *ptr, long len, rb_io_t *fptr)
     long n = len;
     long c;
 
-    if (READ_DATA_PENDING(fptr) == 0) {
+    if (READ_DATA_PENDING_COUNT(fptr) == 0) {
         while (n > 0) {
           again:
             rb_io_check_closed(fptr);
