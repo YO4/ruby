@@ -533,6 +533,7 @@ rb_cloexec_fcntl_dupfd(int fd, int minfd)
   0)
 #define NEED_CRLF_EOF_CONV(fptr) ((fptr)->encs.ecflags & ECONV_NEWLINE_DECORATOR_MASK)
 #define CTRLZ '\x1A'
+#define READ_DATA_IS_CTRLZ(fptr) ((fptr)->rbuf.len && (fptr)->rbuf.ptr[(fptr)->rbuf.off] == CTRLZ)
 
 #else
 /* Unix */
@@ -543,6 +544,7 @@ rb_cloexec_fcntl_dupfd(int fd, int minfd)
   NEED_NEWLINE_DECORATOR_ON_WRITE(fptr) ||                        \
   ((fptr)->encs.ecflags & (ECONV_DECORATOR_MASK|ECONV_STATEFUL_DECORATOR_MASK)) || \
   0)
+#define READ_DATA_IS_CTRLZ(fptr) 0
 #endif
 
 #if RUBY_CRLF_ENVIRONMENT
@@ -634,6 +636,65 @@ rb_sys_fail_on_write(rb_io_t *fptr)
 } while(0)
 
 # define CTRLZ '\x1A'
+
+static void io_ungetbyte(VALUE str, rb_io_t *fptr);
+
+/*
+ * Convert CRLF to LF inline, handle CTRLZ as EOF and copy remains to rbuf.
+ */
+static long
+crlf_convert_inline(char *ptr, long len, rb_io_t *fptr)
+{
+    long n, sn, dn;
+    char *sp;
+
+    n = len;
+    if (n <= 0) return 0;
+    if (n == 1) {
+        return 1;
+    }
+    sp = ptr + n - 1;
+    sn = -n + 1;
+    do {
+        if (sp[sn] == CTRLZ) {
+            dn = sn;
+            goto ctrlz;
+        }
+        if (sp[sn] == '\r' && sp[sn + 1] == '\n') {
+            break;
+        }
+    } while (++sn < 0);
+    dn = sn;
+    if (sn < 0) {
+        while (sn < 0) {
+            if (sp[sn] == CTRLZ) {
+                goto ctrlz;
+            }
+            if (sp[sn] == '\r' && sp[sn + 1] == '\n') {
+                sp[dn++] = '\n';
+                sn += 2;
+            } else {
+                sp[dn++] = sp[sn++];
+            }
+        }
+    }
+    if (sn == 0) {
+        if (sp[sn] == '\r') {
+            struct RString fake = {RBASIC_INIT};
+            io_ungetbyte(rb_setup_fake_str(&fake, sp + sn, 1, 0), fptr);
+        }
+        else if (sp[sn] != CTRLZ) {
+            sp[dn++] = sp[sn++];
+        }
+    }
+  ctrlz:
+    if (sn < 1) {
+        struct RString fake = {RBASIC_INIT};
+        io_ungetbyte(rb_setup_fake_str(&fake, sp + sn, 1 - sn, 0), fptr);
+    }
+    n += sn - 1;
+    return len + dn - 1;
+}
 
 /*
  * IO unread with taking care of removed '\r' in text mode.
@@ -3405,17 +3466,31 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
     if (siz == 0) siz = BUFSIZ;
     shrinkable = io_setstrbuf(&str, siz);
     for (;;) {
+        long bytes_raw;
         READ_CHECK(fptr);
         n = io_fread(str, bytes, siz - bytes, fptr);
         if (n == 0 && bytes == 0) {
             rb_str_set_len(str, 0);
             break;
         }
+#if RUBY_CRLF_ENVIRONMENT
+        if (NEED_CRLF_EOF_CONV(fptr)) {
+            bytes_raw = bytes + n;
+            n = crlf_convert_inline(RSTRING_PTR(str) + bytes, n, fptr);
+            bytes += n;
+        }
+        else {
+            bytes += n;
+            bytes_raw = bytes;
+        }
+#else
         bytes += n;
+        bytes_raw = bytes;
+#endif
         rb_str_set_len(str, bytes);
         if (cr != ENC_CODERANGE_BROKEN)
             pos += rb_str_coderange_scan_restartable(RSTRING_PTR(str) + pos, RSTRING_PTR(str) + bytes, enc, &cr);
-        if (bytes < siz) break;
+        if (bytes_raw < siz || READ_DATA_IS_CTRLZ(fptr)) break;
         siz += BUFSIZ;
 
         size_t capa = rb_str_capacity(str);
