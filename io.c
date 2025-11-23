@@ -3077,6 +3077,52 @@ read_buffered_data(char *ptr, long len, rb_io_t *fptr)
     return n;
 }
 
+#if RUBY_CRLF_ENVIRONMENT
+static long
+read_buffered_data_with_crlf(char *ptr, long len, rb_io_t *fptr)
+{
+    int n, sn, dn;
+    char *sp, *dp;
+
+    n = READ_DATA_PENDING_COUNT(fptr);
+    if (n <= 0) return 0;
+    if (n == 1) {
+        // force output trailing '\r'
+        *ptr = fptr->rbuf.ptr[fptr->rbuf.off++];
+        fptr->rbuf.len = 0;
+        return 1;
+    }
+    sp = fptr->rbuf.ptr + fptr->rbuf.off + n - 1;
+    sn = -n + 1;
+    dp = ptr + len;
+    dn = -len;
+    if (n >= 2) {
+        while (sn < 0 && dn) {
+            if (sp[sn] == CTRLZ) break;
+            if (sp[sn] == '\r' && sp[sn + 1] == '\n') {
+                dp[dn++] = '\n';
+                sn += 2;
+            } else {
+                dp[dn++] = sp[sn++];
+            }
+        }
+    }
+    if (dn) {
+        // at this point sn == 0 or sn == 1
+        if (sn == 0) {
+            if (sp[sn] != CTRLZ && sp[sn] != '\r') {
+                dp[dn++] = sp[sn++];
+            }
+        }
+    }
+    n += sn - 1;
+    len += dn;
+    fptr->rbuf.off += n;
+    fptr->rbuf.len -= n;
+    return len;
+}
+#endif
+
 static long
 io_bufread(char *ptr, long len, rb_io_t *fptr)
 {
