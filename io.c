@@ -3148,6 +3148,12 @@ io_bufread(char *ptr, long len, rb_io_t *fptr)
     }
 
     while (n > 0) {
+#if RUBY_CRLF_ENVIRONMENT
+        if (NEED_CRLF_EOF_CONV(fptr)) {
+            c = read_buffered_data_with_crlf(ptr+offset, n, fptr);
+        }
+        else
+#endif
         c = read_buffered_data(ptr+offset, n, fptr);
         if (c > 0) {
             offset += c;
