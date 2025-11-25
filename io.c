@@ -3071,52 +3071,6 @@ read_buffered_data(char *ptr, long len, rb_io_t *fptr)
     return n;
 }
 
-#if RUBY_CRLF_ENVIRONMENT
-static long
-read_buffered_data_with_crlf(char *ptr, long len, rb_io_t *fptr)
-{
-    int n, sn, dn;
-    char *sp, *dp;
-
-    n = READ_DATA_PENDING_COUNT(fptr);
-    if (n <= 0) return 0;
-    if (n == 1) {
-        // force output trailing '\r'
-        *ptr = fptr->rbuf.ptr[fptr->rbuf.off++];
-        fptr->rbuf.len = 0;
-        return 1;
-    }
-    sp = fptr->rbuf.ptr + fptr->rbuf.off + n - 1;
-    sn = -n + 1;
-    dp = ptr + len;
-    dn = -len;
-    if (n >= 2) {
-        while (sn < 0 && dn) {
-            if (sp[sn] == CTRLZ) break;
-            if (sp[sn] == '\r' && sp[sn + 1] == '\n') {
-                dp[dn++] = '\n';
-                sn += 2;
-            } else {
-                dp[dn++] = sp[sn++];
-            }
-        }
-    }
-    if (dn) {
-        // at this point sn == 0 or sn == 1
-        if (sn == 0) {
-            if (sp[sn] != CTRLZ && sp[sn] != '\r') {
-                dp[dn++] = sp[sn++];
-            }
-        }
-    }
-    n += sn - 1;
-    len += dn;
-    fptr->rbuf.off += n;
-    fptr->rbuf.len -= n;
-    return len;
-}
-#endif
-
 static long
 io_bufread(char *ptr, long len, rb_io_t *fptr)
 {
@@ -3142,12 +3096,6 @@ io_bufread(char *ptr, long len, rb_io_t *fptr)
     }
 
     while (n > 0) {
-#if RUBY_CRLF_ENVIRONMENT
-        if (NEED_CRLF_EOF_CONV(fptr)) {
-            c = read_buffered_data_with_crlf(ptr+offset, n, fptr);
-        }
-        else
-#endif
         c = read_buffered_data(ptr+offset, n, fptr);
         if (c > 0) {
             offset += c;
@@ -3192,6 +3140,121 @@ io_fread(VALUE str, long offset, long size, rb_io_t *fptr)
     if (len < 0) rb_sys_fail_path(fptr->pathv);
     return len;
 }
+
+#if RUBY_CRLF_ENVIRONMENT
+static long
+read_buffered_data_with_crlf(char *ptr, long len, rb_io_t *fptr)
+{
+    int n, sn, dn;
+    char *sp, *dp;
+
+    n = READ_DATA_PENDING_COUNT(fptr);
+    if (n <= 0) return 0;
+    if (n == 1) {
+        // force output trailing '\r'
+        *ptr = fptr->rbuf.ptr[fptr->rbuf.off++];
+        fptr->rbuf.len = 0;
+        return 1;
+    }
+    sp = fptr->rbuf.ptr + fptr->rbuf.off + n - 1;
+    sn = -n + 1;
+    dp = ptr + len;
+    dn = -len;
+    if (n >= 2) {
+        while (sn < 0 && dn) {
+            if (sp[sn] == CTRLZ) break;
+            if (sp[sn] == '\r' && sp[sn + 1] == '\n') {
+                dp[dn++] = '\n';
+                sn += 2;
+            } else {
+                dp[dn++] = sp[sn++];
+            }
+        }
+    }
+    if (dn) {
+        // at this point sn == 0 or sn == 1
+        if (sn == 0) {
+            if (sp[sn] != CTRLZ && sp[sn] != '\r') {
+                dp[dn++] = sp[sn++];
+            }
+        }
+    }
+    n += sn - 1;
+    len += dn;
+    fptr->rbuf.off += n;
+    fptr->rbuf.len -= n;
+    return len;
+}
+
+static long
+io_bufread_with_crlf(char *ptr, long len, rb_io_t *fptr)
+{
+    long offset = 0;
+    long n = len;
+    long c;
+
+    if (READ_DATA_PENDING_COUNT(fptr) == 0) {
+        while (n > 0) {
+          again:
+            rb_io_check_closed(fptr);
+            c = rb_io_read_memory(fptr, ptr+offset, n);
+            if (c == 0) break;
+            if (c < 0) {
+                if (fptr_wait_readable(fptr))
+                    goto again;
+                return -1;
+            }
+            offset += c;
+            if ((n -= c) <= 0) break;
+        }
+        if (!NEED_CRLF_EOF_CONV(fptr)) {
+            return len - n;
+        }
+    }
+
+    while (n > 0) {
+        if (NEED_CRLF_EOF_CONV(fptr)) {
+            c = read_buffered_data_with_crlf(ptr+offset, n, fptr);
+        }
+        else {
+            c = read_buffered_data(ptr+offset, n, fptr);
+        }
+        if (c > 0) {
+            offset += c;
+            if ((n -= c) <= 0) break;
+        }
+        rb_io_check_closed(fptr);
+        if (io_fillbuf(fptr) < 0) {
+            break;
+        }
+    }
+    return len - n;
+}
+
+static VALUE
+bufread_call_with_crlf(VALUE arg)
+{
+    struct bufread_arg *p = (struct bufread_arg *)arg;
+    p->len = io_bufread_with_crlf(p->str_ptr, p->len, p->fptr);
+    return Qundef;
+}
+
+static long
+io_fread_with_crlf(VALUE str, long offset, long size, rb_io_t *fptr)
+{
+    long len;
+    struct bufread_arg arg;
+
+    io_setstrbuf(&str, offset + size);
+    arg.str_ptr = RSTRING_PTR(str) + offset;
+    arg.len = size;
+    arg.fptr = fptr;
+    rb_str_locktmp_ensure(str, bufread_call_with_crlf, (VALUE)&arg);
+    len = arg.len;
+    if (len < 0) rb_sys_fail_path(fptr->pathv);
+    return len;
+}
+#endif
 
 static long
 remain_size(rb_io_t *fptr)
@@ -3463,7 +3526,7 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
     shrinkable = io_setstrbuf(&str, siz);
     for (;;) {
         READ_CHECK(fptr);
-        n = io_fread(str, bytes, siz - bytes, fptr);
+        n = io_fread_with_crlf(str, bytes, siz - bytes, fptr);
         if (n == 0 && bytes == 0) {
             rb_str_set_len(str, 0);
             break;
