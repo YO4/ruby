@@ -547,7 +547,7 @@ rb_cloexec_fcntl_dupfd(int fd, int minfd)
 
 #if RUBY_CRLF_ENVIRONMENT
 #define READ_DATA_PENDING(fptr) ((fptr)->rbuf.len && \
-  (NEED_READCONV(fptr) || !NEED_CRLF_EOF_CONV(fptr) || *(fptr)->rbuf.ptr != CTRLZ))
+  (NEED_READCONV(fptr) || !NEED_CRLF_EOF_CONV(fptr) || (fptr)->rbuf.ptr[(fptr)->rbuf.off] != CTRLZ))
 #else
 #define READ_DATA_PENDING(fptr) ((fptr)->rbuf.len)
 #endif
@@ -625,16 +625,7 @@ rb_sys_fail_on_write(rb_io_t *fptr)
 #if RUBY_CRLF_ENVIRONMENT
 #define SET_BINARY_MODE(fptr) setmode((fptr)->fd, O_BINARY)
 
-#define NEED_NEWLINE_DECORATOR_ON_READ_CHECK(fptr) do {\
-    if (NEED_NEWLINE_DECORATOR_ON_READ(fptr)) {\
-        if (!((fptr)->encs.ecflags & ECONV_NEWLINE_DECORATOR_MASK)) {\
-            setmode((fptr)->fd, O_BINARY);\
-        }\
-        else {\
-            setmode((fptr)->fd, O_TEXT);\
-        }\
-    }\
-} while(0)
+#define NEED_NEWLINE_DECORATOR_ON_READ_CHECK(fptr) setmode((fptr)->fd, O_BINARY)
 
 #define SET_UNIVERSAL_NEWLINE_DECORATOR_IF_ENC2(enc2, ecflags) do {\
     if ((enc2) && ((ecflags) & ECONV_DEFAULT_NEWLINE_DECORATOR)) {\
@@ -2727,11 +2718,14 @@ rb_io_eof(VALUE io)
     if (READ_CHAR_PENDING(fptr)) return Qfalse;
     if (READ_DATA_PENDING(fptr)) return Qfalse;
     READ_CHECK(fptr);
+#if RUBY_CRLF_ENVIRONMENT
+    setmode(fptr->fd, O_BINARY);
+#endif
     r = io_fillbuf(fptr);
 #if RUBY_CRLF_ENVIRONMENT
     if (!NEED_READCONV(fptr)) {
         if ((fptr)->encs.ecflags & ECONV_NEWLINE_DECORATOR_MASK) {
-            return RBOOL(r < 0 || READ_DATA_PENDING_PTR(fptr)[0] == CTRLZ);
+            return RBOOL(r < 0 || (fptr)->rbuf.ptr[(fptr)->rbuf.off] == CTRLZ);
         }
     }
 #endif
@@ -4016,7 +4010,6 @@ appendline(rb_io_t *fptr, int delim, VALUE *strp, long *lp, rb_encoding *enc)
             const char *e;
             const char *np = p;
             long crlf_shrink = 0;
-            
 #else
             const char *p = READ_DATA_PENDING_PTR(fptr);
             const char *e;
