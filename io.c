@@ -4143,7 +4143,7 @@ appendline(rb_io_t *fptr, int delim, VALUE *strp, long *lp, rb_encoding *enc)
 #if RUBY_CRLF_ENVIRONMENT
             char *p = READ_DATA_PENDING_PTR(fptr);
             const char *e;
-            const char *np = p;
+            char *np = p;
             long crlf_shrink = 0;
 #else
             const char *p = READ_DATA_PENDING_PTR(fptr);
@@ -4155,16 +4155,27 @@ appendline(rb_io_t *fptr, int delim, VALUE *strp, long *lp, rb_encoding *enc)
 
             if (limit > 0 && pending > limit) pending = limit;
           retry:
-            e = search_delim(np, pending, delim, enc);
+            e = search_delim(np, pending - (np - p), delim, enc);
             if (e) pending = e - p;
 #if RUBY_CRLF_ENVIRONMENT
             if (NEED_CRLF_EOF_CONV(fptr)) {
-                char *sp ,*dp;
+                char *sp ,*dp, *ep;
 
-                if (e && e[-1] == '\r') {
-                    if (e - p < READ_DATA_PENDING_COUNT(fptr) && e[0] == '\n') {
-                        np = e;
-                        goto retry;
+                if (!e && pending < READ_DATA_PENDING_COUNT(fptr)) {
+                    long frontier = READ_DATA_PENDING_COUNT(fptr) - pending;
+                    long crlf_found = 0;
+                    if (frontier > 0) {
+                        for (sp = np, ep = p + pending; sp < ep && frontier; sp++) {
+                            if (sp[0] == '\r' && sp[1] == '\n') {
+                                crlf_found++;
+                                frontier--;
+                            }
+                        }
+                        if (crlf_found) {
+                            np = p + pending;
+                            pending += crlf_found;
+                            goto retry;
+                        }
                     }
                 }
                 if (pending >= 2) {
