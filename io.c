@@ -181,6 +181,8 @@ off_t __syscall(quad_t number, ...);
 #define open	rb_w32_uopen
 #undef read
 #define read(f, b, s) rb_w32_binread(f, b, s)
+#undef write
+#define write(f, b, s) rb_w32_binwrite(f, b, s)
 #undef rename
 #define rename(f, t)	rb_w32_urename((f), (t))
 #include "win32/file.h"
@@ -603,13 +605,10 @@ rb_sys_fail_on_write(rb_io_t *fptr)
  * conversion IO process and universal newline decorator by default.
  */
 #define NEED_READCONV(fptr) ((fptr)->encs.enc2 != NULL || (fptr)->encs.ecflags & ~ECONV_CRLF_NEWLINE_DECORATOR)
-#define WRITECONV_MASK ( \
-    (ECONV_DECORATOR_MASK & ~ECONV_CRLF_NEWLINE_DECORATOR)|\
-    ECONV_STATEFUL_DECORATOR_MASK|\
-    0)
 #define NEED_WRITECONV(fptr) ( \
   ((fptr)->encs.enc != NULL && (fptr)->encs.enc != rb_ascii8bit_encoding()) || \
-  ((fptr)->encs.ecflags & WRITECONV_MASK) || \
+  NEED_NEWLINE_DECORATOR_ON_WRITE(fptr) ||                        \
+  ((fptr)->encs.ecflags & (ECONV_DECORATOR_MASK|ECONV_STATEFUL_DECORATOR_MASK)) || \
   0)
 #define SET_BINARY_MODE(fptr) setmode((fptr)->fd, O_BINARY)
 
@@ -1897,7 +1896,34 @@ do_writeconv(VALUE str, rb_io_t *fptr, int *converted)
 {
     if (NEED_WRITECONV(fptr)) {
         VALUE common_encoding = Qnil;
-        SET_BINARY_MODE(fptr);
+
+        if (((fptr)->encs.enc == NULL || (fptr)->encs.enc == rb_ascii8bit_encoding()) &&
+            ((fptr)->encs.ecflags & (ECONV_DECORATOR_MASK|ECONV_STATEFUL_DECORATOR_MASK)) == ECONV_CRLF_NEWLINE_DECORATOR) {
+            long n = 0;
+            VALUE ret;
+            char *p;
+
+            if (!rb_enc_asciicompat(rb_enc_get(str))) {
+                rb_raise(rb_eArgError, "ASCII incompatible string written for text mode IO without encoding conversion: %s",
+                         rb_enc_name(rb_enc_get(str)));
+            }
+            for (long i = 0; i < RSTRING_LEN(str); i++)
+                if (RSTRING_PTR(str)[i] == '\n') n++;
+            if (n == 0) return str;
+            ret = rb_str_buf_new(RSTRING_LEN(str) + n);
+            p = RSTRING_PTR(ret);
+            for (long i = 0; i < RSTRING_LEN(str); i++) {
+                if (RSTRING_PTR(str)[i] == '\n') {
+                    *p++ = '\r';
+                    *p++ = '\n';
+                }
+                else
+                    *p++ = RSTRING_PTR(str)[i];
+            }
+            rb_str_set_len(ret, RSTRING_LEN(str) + n);
+            *converted = 1;
+            return ret;
+        }
 
         make_writeconv(fptr);
 
@@ -1929,22 +1955,6 @@ do_writeconv(VALUE str, rb_io_t *fptr, int *converted)
             *converted = 1;
         }
     }
-#if RUBY_CRLF_ENVIRONMENT
-#define fmode (fptr->mode)
-    else if (MODE_BTMODE(DEFAULT_TEXTMODE,0,1)) {
-        if (!(fptr->encs.ecflags & ECONV_CRLF_NEWLINE_DECORATOR)) {
-            setmode(fptr->fd, O_BINARY);
-        }
-        else {
-            setmode(fptr->fd, O_TEXT);
-        }
-        if (!rb_enc_asciicompat(rb_enc_get(str))) {
-            rb_raise(rb_eArgError, "ASCII incompatible string written for text mode IO without encoding conversion: %s",
-            rb_enc_name(rb_enc_get(str)));
-        }
-    }
-#undef fmode
-#endif
     return str;
 }
 
