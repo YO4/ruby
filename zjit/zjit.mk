@@ -124,6 +124,9 @@ zjit-test-gdb: libminiruby.a
 zjit-test-rr: libminiruby.a
 	$(Q) $(MAKE) zjit-test-debug ZJIT_DEBUGGER="rr record"
 
+endif # ifneq ($(strip $(CARGO)),
+endif # ifneq ($(ZJIT_SUPPORT),no)
+
 # A library for booting miniruby in tests.
 # Why not use libruby-static.a for this?
 #  - Initialization of the full ruby involves dynamic linking for e.g. transcoding implementations
@@ -135,6 +138,3 @@ libminiruby.a: miniruby$(EXEEXT)
 	$(Q) $(AR) $(ARFLAGS) $@ $(MINIOBJS) $(COMMONOBJS)
 
 libminiruby: libminiruby.a
-
-endif # ifneq ($(strip $(CARGO)),
-endif # ifneq ($(ZJIT_SUPPORT),no)
