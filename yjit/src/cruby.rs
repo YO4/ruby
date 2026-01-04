@@ -102,6 +102,17 @@ mod autogened {
     use super::*;
     // Textually include output from rust-bindgen as suggested by its user guide.
     include!("cruby_bindings.inc.rs");
+
+    // The size of C long is not same as pointer size on 64bit Windows
+    // TODO: The ID name conflict, so they are here.
+    #[cfg(not(windows))]
+    pub type ID = ::std::os::raw::c_ulong;
+    #[cfg(not(windows))]
+    pub type st_data_t = ::std::os::raw::c_ulong;
+    #[cfg(windows)]
+    pub type ID = ::std::os::raw::c_ulonglong;
+    #[cfg(windows)]
+    pub type st_data_t = ::std::os::raw::c_ulonglong;
 }
 pub use autogened::*;
 

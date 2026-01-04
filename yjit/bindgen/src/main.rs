@@ -62,6 +62,10 @@ fn main() {
         .blocklist_type("size_t")
         .blocklist_type("fpos_t")
 
+        // Block for compatibility since output is different on Windows and others
+        .blocklist_type("ID")
+        .blocklist_type("st_data_t")
+
         // Import YARV bytecode instruction constants
         .allowlist_type("ruby_vminsn_type")
 
