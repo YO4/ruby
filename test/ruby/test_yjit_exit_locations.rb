@@ -7,6 +7,9 @@ require 'test/unit'
 require 'envutil'
 require 'tmpdir'
 require_relative '../lib/jit_support'
+if RUBY_PLATFORM =~ /mingw|mswin/
+  require 'socket'
+end
 
 return unless JITSupport.yjit_supported?
 
@@ -26,7 +29,7 @@ class TestYJITExitLocations < Test::Unit::TestCase
 
   def assert_exit_locations(test_script)
     write_results = <<~RUBY
-      IO.open(3).write Marshal.dump({
+      IO.open(3, "wb").write Marshal.dump({
         enabled: RubyVM::YJIT.trace_exit_locations_enabled?,
         exit_locations: RubyVM::YJIT.exit_locations
       })
@@ -72,21 +75,53 @@ class TestYJITExitLocations < Test::Unit::TestCase
   end
 
   def eval_with_jit(script)
+    if RUBY_PLATFORM =~ /mingw|mswin/
+      sockname = File.join(ENV["USERPROFILE"].gsub("\\","/"), "#{method_name}@#{Process.pid}.sock") # Use path shorter than tmpdir
+    end
     args = [
       "--disable-gems",
       "--yjit-call-threshold=1",
       "--yjit-trace-exits"
     ]
+    if sockname
+      args << "-rsocket"
+      args << "-e"
+      args << script_shell_encode("Object.class_variable_set(:@@stat_w, UNIXSocket.new(\"#{sockname}\"))")
+    end
     args << "-e" << script_shell_encode(script)
-    stats_r, stats_w = IO.pipe
+    if sockname
+      srv = UNIXServer.new(sockname)
+    else
+      stats_r, stats_w = IO.pipe
+    end
+    ios = sockname ? {} : { 3 => stats_w }
     _out, _err, _status = EnvUtil.invoke_ruby(args,
-                                              '', true, true, timeout: 1000, ios: { 3 => stats_w }
+                                              '', true, true, timeout: 1000, ios: ios
                                              )
-    stats_w.close
+    if sockname
+      result = IO.select([srv], [], [], timeout = 1000 * 2)
+      if result
+        stats_r = srv.accept
+      else
+        raise Timeout::Error # unreachable
+      end
+    else
+      stats_w.close
+    end
     stats = stats_r.read
     stats = Marshal.load(stats) if !stats.empty?
     stats_r.close
     stats
+  ensure
+    stats_r&.close
+    stats_w&.close
+    if sockname
+      srv&.close
+      begin
+        File.unlink sockname
+      rescue StandardError
+      end
+    end
   end
 
   def script_shell_encode(s)
