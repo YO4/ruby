@@ -6,6 +6,7 @@ use crate::codegen::CodePtr;
 use crate::options::DumpDisasm;
 
 use std::fmt::Write;
+use std::os::raw::c_long;
 
 #[cfg_attr(not(feature = "disasm"), allow(dead_code))]
 #[derive(Copy, Clone, Debug)]
@@ -337,7 +338,7 @@ pub extern "C" fn rb_yjit_insns_compiled(_ec: EcPtr, _ruby_self: VALUE, iseqw: V
     let insn_vec = insns_compiled(iseq);
 
     unsafe {
-        let insn_ary = rb_ary_new_capa((insn_vec.len() * 2) as i64);
+        let insn_ary = rb_ary_new_capa((insn_vec.len() * 2) as c_long);
 
         // For each instruction compiled
         for idx in 0..insn_vec.len() {
@@ -349,10 +350,10 @@ pub extern "C" fn rb_yjit_insns_compiled(_ec: EcPtr, _ruby_self: VALUE, iseqw: V
             // Store the instruction index and opcode symbol
             rb_ary_store(
                 insn_ary,
-                (2 * idx + 0) as i64,
+                (2 * idx + 0) as c_long,
                 VALUE::fixnum_from_usize(insn_idx as usize),
             );
-            rb_ary_store(insn_ary, (2 * idx + 1) as i64, op_sym);
+            rb_ary_store(insn_ary, (2 * idx + 1) as c_long, op_sym);
         }
 
         insn_ary
