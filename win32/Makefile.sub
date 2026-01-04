@@ -111,6 +111,12 @@ CC = cl -nologo
 !if !defined(CPP) || "$(CPP)" == "cl"
 CPP = $(CC) -E
 !endif
+!if !defined(RUSTC)
+RUSTC = rustc
+!endif
+!if !defined(cargo)
+CARGO = cargo
+!endif
 !if !defined(LRAMA)
 LRAMA = $(BASERUBY) $(top_srcdir)/tool/lrama/exe/lrama
 !endif
@@ -482,6 +488,58 @@ arch_hdrdir = $(ext_hdrdir)/$(arch)
 top_srcdir = $(srcdir)
 hdrdir = $(srcdir)/include
 VPATH = $(arch_hdrdir)/ruby;$(hdrdir)/ruby;$(srcdir);$(srcdir)/missing;$(win_srcdir)
+
+#####YJIT
+
+!if "$(USE_YJIT)" == "1"
+
+# Show Cargo progress when doing `make V=1`
+!if !defined(V) || "$V" == "0"
+CARGO_VERBOSE = -q
+!endif
+
+LIBS = $(LIBS) ntdll.lib userenv.lib
+JIT_OBJ=jit.$(OBJEXT)
+YJIT_OBJ=yjit.$(OBJEXT)
+
+CARGO_TARGET_DIR=$(TOP_BUILD_DIR)/target
+CARGO_BUILD_ARGS=--profile $(JIT_CARGO_SUPPORT) --features $(rb_cargo_features),yjit
+JIT_RUST_FLAGS=--crate-type=staticlib --cfg feature=\"stats_allocator\"
+
+!if "$(YJIT_SUPPORT)" == ""
+YJIT_LIB_BUILD=release
+YJIT_LIBS=$(TOP_BUILD_DIR)/target/$(YJIT_LIB_BUILD)/yjit.lib
+RUST_LIBOBJ=$(YJIT_LIBS)
+
+!else
+YJIT_LIBS=$(TOP_BUILD_DIR)/target/$(YJIT_LIB_BUILD)/ruby.lib
+RUST_LIBOBJ=$(YJIT_LIBS)
+
+!if "$(YJIT_SUPPORT)" == "dev"
+rb_cargo_features = disasm,runtime_checks
+JIT_CARGO_SUPPORT=dev
+YJIT_LIB_BUILD=debug
+!else if "$(YJIT_SUPPORT)" == "dev_nodebug"
+rb_cargo_features = disasm
+JIT_CARGO_SUPPORT=dev_nodebug
+YJIT_LIB_BUILD=$(JIT_CARGO_SUPPORT)
+!else if "$(YJIT_SUPPORT)" == "stats"
+JIT_CARGO_SUPPORT=stats
+YJIT_LIB_BUILD=$(JIT_CARGO_SUPPORT)
+!endif
+
+!ifndef JIT_CARGO_SUPPORT
+!error unknow YJIT_SUPPORT value
+!endif
+
+!endif
+
+!else
+USE_YJIT = 0
+JIT_CARGO_SUPPORT=no
+!endif
+
+#####YJIT
 
 !ifndef GIT
 GIT = git
@@ -891,6 +949,19 @@ $(CONFIG_H): $(MKFILES) $(srcdir)/win32/Makefile.sub $(win_srcdir)/Makefile.sub 
 #define RUBY_COREDLL "$(RT)"
 #define RUBY_PLATFORM "$(arch)"
 #define RUBY_SITEARCH "$(sitearch)"
+#define USE_YJIT $(USE_YJIT)
+!if $(USE_YJIT) == 1
+#define OPT_THREADED_CODE 2 /* OPT_CALL_THREADED_CODE */
+!endif
+!ifdef YJIT_SUPPORT
+#define YJIT_SUPPORT $(YJIT_SUPPORT)
+!endif
+!ifdef YJIT_STATS
+#define YJIT_STATS $(YJIT_STATS)
+!endif
+!ifdef RUBY_DEBUG
+#define RUBY_DEBUG $(RUBY_DEBUG)
+!endif
 #endif /* $(guard) */
 <<
 
@@ -1086,6 +1157,9 @@ s,@top_srcdir@,$(srcdir),;t t
 s,@try_header@,try_compile,;t t
 s,@ruby_pc@,$(ruby_pc),;t t
 s,@PKG_CONFIG@,$(PKG_CONFIG),;t t
+s,@TOP_BUILD_DIR@,$(TOP_BUILD_DIR),;t t
+s,@YJIT_SUPPORT@,$(YJIT_SUPPORT),;t t
+s,@USE_YJIT@,$(USE_YJIT),;t t
 <<KEEP
 
 !if "$(HAVE_BASERUBY)" != "yes" || "$(CROSS_COMPILING)" == "yes"
@@ -1097,8 +1171,8 @@ miniruby: miniruby$(EXEEXT)
 miniruby$(EXEEXT):
 		@echo $(LIBS)
 		$(ECHO) linking $(@:\=/)
-		$(Q) $(PURIFY) $(CC) $(MAINOBJ) $(MINIOBJS) $(COMMONOBJS) $(LIBS) \
-			$(OUTFLAG)$@ -link $(LDFLAGS) $(XLDFLAGS)
+		$(Q) $(PURIFY) $(CC) $(MAINOBJ) $(MINIOBJS) $(COMMONOBJS) $(ALTLIBS) \
+			$(LIBS) $(OUTFLAG)$@ -link $(LDFLAGS) $(XLDFLAGS)
 		@$(RM) miniruby.lib miniruby.exp
 		$(Q) miniruby.exe -v
 		$(Q) $(LDSHARED_1)
@@ -1140,7 +1214,7 @@ $(LIBRUBY_A):	$(OBJS) $(INITOBJS)
 		@-$(PRE_LIBRUBY_UPDATE)
 !endif
 		$(ECHO) linking static-library $(@:\=/)
-		$(Q) $(AR) $(ARFLAGS)$@ $(OBJS) $(INITOBJS)
+		$(Q) $(AR) $(ARFLAGS)$@ $(OBJS) $(INITOBJS) $(ALTLIBS)
 
 $(LIBRUBY):	$(RUBYDEF)
 		$(ECHO) linking import-library $(@:\=/)
@@ -1430,3 +1504,22 @@ yesterday:
 	for /f "usebackq" %H in \
 	    (`$(GIT_LOG_FORMAT)%H -1 "--before=00:00"`) do \
 	    $(GIT_IN_SRC) reset --hard %%H
+
+!if "$(USE_YJIT)" == "1"
+!if "$(YJIT_SUPPORT)" == ""
+
+!message release mode
+
+$(YJIT_LIBS): nul
+	$(ECHO) 'building Rust YJIT (release mode)'
+	$(Q) $(RUSTC) $(YJIT_RUSTC_ARGS)
+!else
+
+$(YJIT_LIBS): nul
+	$(ECHO) 'building Rust YJIT ($(YJIT_SUPPORT) mode)'
+	$(Q)$(CHDIR) $(top_srcdir) && \
+	        set "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" && \
+	        set "CARGO_TERM_PROGRESS_WHEN=never" && \
+	        $(CARGO) $(CARGO_VERBOSE) build $(CARGO_BUILD_ARGS)
+!endif
+!endif

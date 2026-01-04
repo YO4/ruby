@@ -7,6 +7,8 @@ for %%I in (%0) do if /%%~dpI/ == /%CD%\/ (
     echo don't run in win32 directory.
     exit /b 999
 )
+for %%I in (%CD%) do set TOP_BUILD_DIR=%%~dpnxI
+set TOP_BUILD_DIR=%TOP_BUILD_DIR:\=/%
 
 set XINCFLAGS=
 set XLDFLAGS=
@@ -16,6 +18,7 @@ set pathlist=
 set config_make=confargs~%RANDOM%.mak
 set confargs=%config_make:.mak=.c%
 echo>%config_make% # CONFIGURE
+echo>%config_make% TOP_BUILD_DIR=%TOP_BUILD_DIR%
 (
   echo #define $ $$ //
   echo !ifndef CONFIGURE_ARGS
@@ -46,6 +49,8 @@ if "%1" == "--enable-debug-env" goto :enable-debug-env
 if "%1" == "--disable-debug-env" goto :disable-debug-env
 if "%1" == "--enable-devel" goto :enable-devel
 if "%1" == "--disable-devel" goto :disable-devel
+if "%1" == "--enable-yjit" goto :enable-yjit
+if "%1" == "--disable-yjit" goto :disable-yjit
 if "%1" == "--enable-rubygems" goto :enable-rubygems
 if "%1" == "--disable-rubygems" goto :disable-rubygems
 if "%1" == "--extout" goto :extout
@@ -167,6 +172,44 @@ goto :loop ;
 goto :loop ;
 :disable-devel
   echo>> %config_make% RUBY_DEVEL = no
+  echo>>%confargs%  %1 \
+  shift
+:enable-yjit
+  if x%2==xno (
+    echo>> %config_make% USE_YJIT = 0
+    echo>>%confargs%  %1=%2 \
+    shift
+  ) else if x%2==xdev (
+    echo>> %config_make% YJIT_SUPPORT = %2
+    echo>> %config_make% USE_YJIT = 1
+    rem echo>> %config_make% RUBY_DEBUG = 1
+    echo>> %config_make% YJIT_STATS = 1
+    echo>>%confargs%  %1=%2 \
+    shift
+  ) else if x%2==xdev_nodebug (
+    echo>> %config_make% YJIT_SUPPORT = %2
+    echo>> %config_make% USE_YJIT = 1
+    echo>> %config_make% YJIT_STATS = 1
+    echo>>%confargs%  %1=%2 \
+    shift
+  ) else if x%2==xstats (
+    echo>> %config_make% YJIT_SUPPORT = %2
+    echo>> %config_make% USE_YJIT = 1
+    echo>> %config_make% YJIT_STATS = 1
+    echo>>%confargs%  %1=%2 \
+    shift
+  ) else if x%2==xyes (
+    echo>> %config_make% USE_YJIT = 1
+    echo>>%confargs%  %1=%2 \
+    shift
+  ) else (
+    echo>> %config_make% USE_YJIT = 1
+    echo>>%confargs%  %1 \
+  )
+  shift
+goto :loop ;
+:disable-yjit
+  echo>> %config_make% USE_YJIT = 0
   echo>>%confargs%  %1 \
   shift
 goto :loop ;
