@@ -4099,6 +4099,12 @@ AS_IF([test -n "$RUST_LIB"], [
         LDFLAGS="$LDFLAGS -lpthread -lc++abi"
     ])
 
+    AS_CASE(["$target_os"],
+    [msys*|mingw*], [
+        # library for the rust stdlib
+        LIBS="-lntdll -luserenv $LIBS"
+    ])
+
     # absolute path to stop the "target" dir in src dir from interfering through VPATH
     RUST_LIB="$(pwd)/${RUST_LIB}"
 ])
