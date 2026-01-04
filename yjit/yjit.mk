@@ -38,9 +38,12 @@ RUST_VERSION = +1.58.0
 
 # Gives quick feedback about YJIT. Not a replacement for a full test run.
 .PHONY: yjit-check
-yjit-check:
+yjit-check: libminiruby.a
 ifneq ($(strip $(CARGO)),)
-	$(CARGO) test --all-features -q --manifest-path='$(top_srcdir)/yjit/Cargo.toml'
+	RUBY_BUILD_DIR='$(TOP_BUILD_DIR)' \
+	    RUBY_LD_FLAGS='$(LDFLAGS) $(XLDFLAGS) $(MAINLIBS)' \
+	    CARGO_TARGET_DIR='$(CARGO_TARGET_DIR)' \
+	    $(CARGO) test --all-features -q --manifest-path='$(top_srcdir)/yjit/Cargo.toml'
 endif
 	$(MAKE) btest RUN_OPTS='--yjit-call-threshold=1' BTESTS=-j
 	$(MAKE) test-all TESTS='$(top_srcdir)/test/ruby/test_yjit.rb'
