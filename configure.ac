@@ -4103,6 +4103,10 @@ AS_IF([test -n "$RUST_LIB"], [
     [msys*|mingw*], [
         # library for the rust stdlib
         LIBS="-lntdll -luserenv $LIBS"
+        # Windows PE linkers does not support partial linking, so use another way to link jit library.
+        RUST_LIBOBJ=
+    ],[
+        RUST_LIBOBJ='$(RUST_LIB:.a=.$(OBJEXT))'
     ])
 
     # absolute path to stop the "target" dir in src dir from interfering through VPATH
@@ -4122,6 +4126,7 @@ AC_SUBST(ZJIT_LIBS)dnl path to the .a library of ZJIT
 AC_SUBST(ZJIT_OBJ)dnl for optionally building the C parts of ZJIT
 AC_SUBST(JIT_OBJ)dnl for optionally building C glue code for Rust FFI
 AC_SUBST(RUST_LIB)dnl path to the rust .a library that contains either or both JITs
+AC_SUBST(RUST_LIBOBJ)dnl path to the rust .o library that contains either or both JITs
 AC_SUBST(RLIB_DIR)dnl subpath of build directory for .rlib files
 AC_SUBST(JIT_CARGO_SUPPORT)dnl "no" or the cargo profile of the rust code
 }
