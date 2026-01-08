@@ -3394,6 +3394,7 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
         }
     }
 
+    int first = 1;
     NEED_NEWLINE_DECORATOR_ON_READ_CHECK(fptr);
     bytes = 0;
     pos = 0;
@@ -3416,6 +3417,9 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
             pos += rb_str_coderange_scan_restartable(RSTRING_PTR(str) + pos, RSTRING_PTR(str) + bytes, enc, &cr);
         if (bytes < siz) break;
         siz += BUFSIZ;
+        if (first && io_fillbuf(fptr) < 0)
+            break;
+        first = 0;
 
         size_t capa = rb_str_capacity(str);
         if (capa < (size_t)RSTRING_LEN(str) + BUFSIZ) {
