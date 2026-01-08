@@ -10668,7 +10668,7 @@ rb_f_backquote(VALUE obj, VALUE str)
     if (NIL_P(port)) return rb_str_new(0,0);
 
     GetOpenFile(port, fptr);
-    result = read_all(fptr, remain_size(fptr), Qnil);
+    result = read_all(fptr, 0, Qnil);
     rb_io_close(port);
     rb_io_fptr_cleanup_all(fptr);
     RB_GC_GUARD(port);
