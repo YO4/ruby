@@ -1,0 +1,15 @@
+prelude: |
+  require 'tempfile'
+  $file = Tempfile.new('read_bench')
+  $file.seek(1024 * 1024 - 1, :SET)
+  $file.write "\0"
+  $size = $file.pos
+  $file.rewind
+
+benchmark:
+  read:         "$file.read;                               $file.rewind"
+  readn:        "$file.read($size);                        $file.rewind"
+  buf_read:     "$file.readbyte; $file.read;               $file.rewind"
+  buf_readn:    "$file.readbyte; $file.read($size);        $file.rewind"
+  readline:     "$file.readline(rs = nil);                 $file.rewind"
+  buf_readline: "$file.readbyte; $file.readline(rs = nil); $file.rewind"
