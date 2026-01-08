@@ -3404,6 +3404,7 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
 
     if (siz == 0) siz = BUFSIZ;
     shrinkable = io_setstrbuf(&str, siz);
+    RB_ENC_CODERANGE_CLEAR(str);  // avoid coderange scan in rb_str_set_len
     for (;;) {
         READ_CHECK(fptr);
         n = io_fread(str, bytes, siz - bytes, fptr);
