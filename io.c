@@ -3081,37 +3081,28 @@ read_buffered_data(char *ptr, long len, rb_io_t *fptr)
 static long
 io_bufread(char *ptr, long len, rb_io_t *fptr)
 {
-    long offset = 0;
+    long offset;
     long n = len;
     long c;
 
-    if (READ_DATA_PENDING(fptr) == 0) {
-        while (n > 0) {
-          again:
-            rb_io_check_closed(fptr);
-            c = rb_io_read_memory(fptr, ptr+offset, n);
-            if (c == 0) break;
-            if (c < 0) {
-                if (fptr_wait_readable(fptr))
-                    goto again;
-                return -1;
-            }
-            offset += c;
-            if ((n -= c) <= 0) break;
-        }
-        return len - n;
+    c = read_buffered_data(ptr, n, fptr);
+    if ((n -= c) <= 0) {
+        return c;
     }
+    offset = c;
 
     while (n > 0) {
-        c = read_buffered_data(ptr+offset, n, fptr);
-        if (c > 0) {
-            offset += c;
-            if ((n -= c) <= 0) break;
-        }
+      again:
         rb_io_check_closed(fptr);
-        if (io_fillbuf(fptr) < 0) {
-            break;
+        c = rb_io_read_memory(fptr, ptr+offset, n);
+        if (c == 0) break;
+        if (c < 0) {
+            if (fptr_wait_readable(fptr))
+                goto again;
+            return -1;
         }
+        offset += c;
+        if ((n -= c) <= 0) break;
     }
     return len - n;
 }
