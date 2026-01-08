@@ -3426,14 +3426,25 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
         if (bytes < siz) break;
         siz += BUFSIZ;
 
-        size_t capa = rb_str_capacity(str);
-        if (capa < (size_t)RSTRING_LEN(str) + BUFSIZ) {
+        long capa = (long)rb_str_capacity(str);
+        if (capa < BUFSIZ || capa - BUFSIZ < bytes) {
             if (capa < BUFSIZ) {
                 capa = BUFSIZ;
             }
             else if (capa > IO_MAX_BUFFER_GROWTH) {
                 capa = IO_MAX_BUFFER_GROWTH;
             }
+#if SIZEOF_SIZE_T > SIZEOF_LONG
+            if (capa > LONG_MAX - bytes) {
+                if (bytes == LONG_MAX) {
+                    str = io_enc_str(str, fptr);
+                    ENC_CODERANGE_SET(str, cr);
+                    rb_raise(rb_eArgError, "string size too big");
+                }
+                capa = LONG_MAX - bytes;
+                siz = LONG_MAX;
+            }
+#endif
             rb_str_modify_expand(str, capa);
         }
     }
