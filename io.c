@@ -4180,7 +4180,7 @@ rb_io_getline_0(VALUE rs, long limit, int chomp, rb_io_t *fptr)
 
     rb_io_check_char_readable(fptr);
     if (NIL_P(rs) && limit < 0) {
-        str = read_all(fptr, 0, Qnil);
+        str = read_all(fptr, remain_size(fptr), Qnil);
         if (RSTRING_LEN(str) == 0) return Qnil;
     }
     else if (limit == 0) {
