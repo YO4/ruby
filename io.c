@@ -3421,7 +3421,7 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
         }
     }
     str = io_enc_str(str, fptr);
-    io_set_read_length(str, n, shrinkable);
+    io_set_read_length(str, bytes, shrinkable);
     return str;
 }
 
@@ -3827,11 +3827,10 @@ io_read(int argc, VALUE *argv, VALUE io)
         rb_raise(rb_eArgError, "negative length %ld given", len);
     }
 
-    shrinkable = io_setstrbuf(&str,len);
-
     GetOpenFile(io, fptr);
     rb_io_check_byte_readable(fptr);
     if (len == 0) {
+        shrinkable = io_setstrbuf(&str, 0);
         io_set_read_length(str, 0, shrinkable);
         return str;
     }
@@ -3840,8 +3839,13 @@ io_read(int argc, VALUE *argv, VALUE io)
 #if RUBY_CRLF_ENVIRONMENT
     previous_mode = set_binary_mode_with_seek_cur(fptr);
 #endif
-    n = io_fread(str, 0, len, fptr);
-    io_set_read_length(str, n, shrinkable);
+    if (io_fillbuf(fptr) < 0)
+      n = 0;
+    else {
+      shrinkable = io_setstrbuf(&str,len);
+      n = io_fread(str, 0, len, fptr);
+      io_set_read_length(str, n, shrinkable);
+    }
 #if RUBY_CRLF_ENVIRONMENT
     if (previous_mode == O_TEXT) {
         setmode(fptr->fd, O_TEXT);
