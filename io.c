@@ -3129,7 +3129,6 @@ io_fread(VALUE str, long offset, long size, rb_io_t *fptr)
     long len;
     struct bufread_arg arg;
 
-    io_setstrbuf(&str, offset + size);
     arg.str_ptr = RSTRING_PTR(str) + offset;
     arg.len = size;
     arg.fptr = fptr;
