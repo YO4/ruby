@@ -7136,6 +7136,8 @@ io.$(OBJEXT): {$(VPATH)}missing.h
 io.$(OBJEXT): {$(VPATH)}node.h
 io.$(OBJEXT): {$(VPATH)}onigmo.h
 io.$(OBJEXT): {$(VPATH)}oniguruma.h
+io.$(OBJEXT): {$(VPATH)}probes.dmyh
+io.$(OBJEXT): {$(VPATH)}probes.h
 io.$(OBJEXT): {$(VPATH)}ractor.h
 io.$(OBJEXT): {$(VPATH)}ruby_assert.h
 io.$(OBJEXT): {$(VPATH)}ruby_atomic.h

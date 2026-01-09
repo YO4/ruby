@@ -133,6 +133,7 @@
 #include "internal/thread.h"
 #include "internal/transcode.h"
 #include "internal/variable.h"
+#include "probes.h"
 #include "ruby/io.h"
 #include "ruby/io/buffer.h"
 #include "ruby/missing.h"
@@ -3330,6 +3331,7 @@ io_setstrbuf(VALUE *str, long len)
         if (len < 0) {
             rb_raise(rb_eArgError, "negative string size (or size too big)");
         }
+        RUBY_DTRACE_CREATE_HOOK(STRING, len);
         *str = rb_str_buf_new(len);
         return TRUE;
     }
