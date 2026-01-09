@@ -3361,9 +3361,6 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
 {
     long bytes;
     long n;
-    long pos;
-    rb_encoding *enc;
-    int cr;
     int shrinkable;
 
     if (NEED_READCONV(fptr)) {
@@ -3397,10 +3394,6 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
     int first = 1;
     NEED_NEWLINE_DECORATOR_ON_READ_CHECK(fptr);
     bytes = 0;
-    pos = 0;
-
-    enc = io_read_encoding(fptr);
-    cr = 0;
 
     if (siz == 0) siz = BUFSIZ;
     shrinkable = io_setstrbuf(&str, siz);
@@ -3408,13 +3401,9 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
         READ_CHECK(fptr);
         n = io_fread(str, bytes, siz - bytes, fptr);
         if (n == 0 && bytes == 0) {
-            rb_str_set_len(str, 0);
             break;
         }
         bytes += n;
-        rb_str_set_len(str, bytes);
-        if (cr != ENC_CODERANGE_BROKEN)
-            pos += rb_str_coderange_scan_restartable(RSTRING_PTR(str) + pos, RSTRING_PTR(str) + bytes, enc, &cr);
         if (bytes < siz) break;
         siz += BUFSIZ;
         if (first && io_fillbuf(fptr) < 0)
@@ -3432,9 +3421,8 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
             rb_str_modify_expand(str, capa);
         }
     }
-    if (shrinkable) io_shrink_read_string(str, RSTRING_LEN(str));
     str = io_enc_str(str, fptr);
-    ENC_CODERANGE_SET(str, cr);
+    io_set_read_length(str, n, shrinkable);
     return str;
 }
 
