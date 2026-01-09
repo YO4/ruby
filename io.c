@@ -3327,7 +3327,10 @@ static int
 io_setstrbuf(VALUE *str, long len)
 {
     if (NIL_P(*str)) {
-        *str = rb_str_new(0, len);
+        if (len < 0) {
+            rb_raise(rb_eArgError, "negative string size (or size too big)");
+        }
+        *str = rb_str_buf_new(len);
         return TRUE;
     }
     else {
