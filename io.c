@@ -3912,43 +3912,68 @@ appendline(rb_io_t *fptr, int delim, VALUE *strp, long *lp, rb_encoding *enc)
     if (NEED_READCONV(fptr)) {
         SET_BINARY_MODE(fptr);
         make_readconv(fptr, 0);
+        const char *p, *e = NULL;
+        int bytes = 0;
+        int maxlen = rb_enc_mbmaxlen(enc);
+        if (maxlen < 1) maxlen = 1;
         do {
-            const char *p, *e;
             int searchlen = READ_CHAR_PENDING_COUNT(fptr);
-            if (searchlen) {
+            if (searchlen - bytes) {
                 p = READ_CHAR_PENDING_PTR(fptr);
                 if (0 < limit && limit < searchlen)
                     searchlen = (int)limit;
-                e = search_delim(p, searchlen, delim, enc);
+                e = search_delim(p + bytes, searchlen - bytes, delim, enc);
                 if (e) {
-                    int len = (int)(e-p);
-                    if (NIL_P(str))
-                        *strp = str = rb_str_new(p, len);
-                    else
-                        rb_str_buf_cat(str, p, len);
-                    fptr->cbuf.off += len;
-                    fptr->cbuf.len -= len;
-                    limit -= len;
-                    *lp = limit;
-                    return delim;
+                    searchlen = (int)(e-p);
+                    bytes += searchlen - bytes;
+                    limit -= searchlen - bytes;
+                    break;
                 }
 
-                if (NIL_P(str))
-                    *strp = str = rb_str_new(p, searchlen);
-                else
-                    rb_str_buf_cat(str, p, searchlen);
-                fptr->cbuf.off += searchlen;
-                fptr->cbuf.len -= searchlen;
-                limit -= searchlen;
+                bytes += searchlen - bytes;
+                limit -= searchlen - bytes;
+                if (fptr->cbuf.off + bytes + maxlen >= fptr->cbuf.capa ||
+                    limit == 0) {
+                    if (NIL_P(str))
+                        *strp = str = rb_str_new(p, bytes);
+                    else
+                    {
+                        size_t capa = rb_str_capacity(str);
+                        if (capa < (size_t)bytes || capa - bytes < (size_t)RSTRING_LEN(str)) {
+                            if (capa < IO_MAX_BUFFER_GROWTH)
+                                capa += capa;
+                            else {
+                                if (capa > LONG_MAX - IO_MAX_BUFFER_GROWTH)
+                                    capa = LONG_MAX;
+                                else
+                                    capa += IO_MAX_BUFFER_GROWTH;
+                            }
+                            rb_str_modify_expand(str, capa - RSTRING_LEN(str));
+                        }
+                        rb_str_buf_cat(str, p, bytes);
+                    }
+                    fptr->cbuf.off += bytes;
+                    fptr->cbuf.len -= bytes;
 
-                if (limit == 0) {
-                    *lp = limit;
-                    return (unsigned char)RSTRING_PTR(str)[RSTRING_LEN(str)-1];
+                    if (limit == 0) {
+                        *lp = limit;
+                        return (unsigned char)RSTRING_PTR(str)[RSTRING_LEN(str)-1];
+                    }
+                    bytes = 0;
                 }
             }
         } while (more_char(fptr) != MORE_CHAR_FINISHED);
-        clear_readconv(fptr);
+        if (bytes) {
+            if (NIL_P(str))
+                *strp = str = rb_str_new(p, bytes);
+            else
+                rb_str_buf_cat(str, p, bytes);
+            fptr->cbuf.off += bytes;
+            fptr->cbuf.len -= bytes;
+        }
         *lp = limit;
+        if (e) return delim;
+        clear_readconv(fptr);
         return EOF;
     }
 
