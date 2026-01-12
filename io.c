@@ -169,7 +169,8 @@ off_t __syscall(quad_t number, ...);
 #endif
 
 #define IO_RBUF_CAPA_MIN  8192
-#define IO_CBUF_CAPA_MIN  (128*1024)
+//#define IO_CBUF_CAPA_MIN  (128*1024)
+#define IO_CBUF_CAPA_MIN  (8*1024)
 #define IO_RBUF_CAPA_FOR(fptr) (NEED_READCONV(fptr) ? IO_CBUF_CAPA_MIN : IO_RBUF_CAPA_MIN)
 #define IO_WBUF_CAPA_MIN  8192
 
@@ -3216,8 +3217,8 @@ make_readconv(rb_io_t *fptr, int size)
 static VALUE
 fill_cbuf(rb_io_t *fptr, int ec_flags)
 {
-    const unsigned char *ss, *sp, *se;
-    unsigned char *ds, *dp, *de;
+    const unsigned char *sf, *ss, *sp, *se;
+    unsigned char *df, *ds, *dp, *de;
     rb_econv_result_t res;
     int putbackable;
     int cbuf_len0;
@@ -3236,6 +3237,8 @@ fill_cbuf(rb_io_t *fptr, int ec_flags)
 
     cbuf_len0 = fptr->cbuf.len;
 
+    sf = (const unsigned char *)fptr->rbuf.ptr + fptr->rbuf.off;
+    df = (unsigned char *)fptr->cbuf.ptr + fptr->cbuf.off + fptr->cbuf.len;
     while (1) {
         ss = sp = (const unsigned char *)fptr->rbuf.ptr + fptr->rbuf.off;
         se = sp + fptr->rbuf.len;
@@ -3257,8 +3260,32 @@ fill_cbuf(rb_io_t *fptr, int ec_flags)
         if (!NIL_P(exc))
             return exc;
 
-        if (cbuf_len0 != fptr->cbuf.len)
-            return MORE_CHAR_SUSPENDED;
+        if (dp != df) {
+            if (ec_flags & ECONV_AFTER_OUTPUT && !fptr->encs.enc2) {
+                if (res == econv_source_buffer_empty) {
+                    return MORE_CHAR_SUSPENDED;
+                }
+                if (fptr->cbuf.off + fptr->cbuf.len == fptr->cbuf.capa) {
+                    return MORE_CHAR_SUSPENDED;
+                }
+                int n = rb_enc_precise_mbclen((char *)df, (char *)dp - 1, io_read_encoding(fptr));
+                if (ONIGENC_MBCLEN_INVALID_P(n)) {
+                    return MORE_CHAR_SUSPENDED;
+                }
+                else if (ONIGENC_MBCLEN_CHARFOUND_P(n)) {
+                    if (sp - sf != dp - df)
+                        return MORE_CHAR_SUSPENDED;
+                    else {
+                        sf = (const unsigned char *)fptr->rbuf.ptr + fptr->rbuf.off;
+                        df = (unsigned char *)fptr->cbuf.ptr + fptr->cbuf.off + fptr->cbuf.len;
+                    }
+                }
+                else {
+                }
+                /* else if (ONIGENC_MBCLEN_INVALID_P(n)) {} */
+            } else
+                return MORE_CHAR_SUSPENDED;
+        }
 
         if (res == econv_finished) {
             return MORE_CHAR_FINISHED;
