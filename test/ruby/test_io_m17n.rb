@@ -2819,4 +2819,16 @@ EOT
       end
     end
   end
+
+  def test_pos_and_ctrlz
+    bug21687 = '[ruby-core:123806]'
+    with_tmpdir {
+      str = "0123456789"
+      generate_file("tmp", str + "\x1A" + "x" * (1024_0 - str.bytesize - 1))
+      open("tmp", "r") do |f|
+        assert_equal(str.size, f.readline.size)
+        assert_equal(str.size, f.pos)
+      end
+    }
+  end if /mswin|mingw/ =~ RUBY_PLATFORM
 end

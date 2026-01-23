@@ -631,14 +631,11 @@ io_unread(rb_io_t *fptr, bool discard_rbuf)
 {
     rb_off_t r, pos;
     ssize_t read_size;
-    long i;
-    long newlines = 0;
-    long extra_max;
-    char *p;
     char *buf;
 
     rb_io_check_closed(fptr);
-    if (fptr->rbuf.len == 0 || fptr->mode & FMODE_DUPLEX) {
+    if ((fptr->rbuf.len == 0 && !rb_w32_fd_is_text(fptr->fd)) ||
+        fptr->mode & FMODE_DUPLEX) {
         return;
     }
 
@@ -650,55 +647,73 @@ io_unread(rb_io_t *fptr, bool discard_rbuf)
                 fptr->mode |= FMODE_DUPLEX;
             if (!discard_rbuf) return;
         }
-
         goto end;
     }
 
     pos = lseek(fptr->fd, 0, SEEK_CUR);
     if (pos < 0 && errno) {
+        /* can't continue if not seekable. giving up */
         if (errno == ESPIPE)
             fptr->mode |= FMODE_DUPLEX;
-        if (!discard_rbuf) goto end;
+        if (!discard_rbuf) return;
+        goto end;
     }
 
-    /* add extra offset for removed '\r' in rbuf */
-    extra_max = (long)(pos - fptr->rbuf.len);
-    p = fptr->rbuf.ptr + fptr->rbuf.off;
+    const int len = fptr->rbuf.len;
 
-    /* if the end of rbuf is '\r', rbuf doesn't have '\r' within rbuf.len */
-    if (*(fptr->rbuf.ptr + fptr->rbuf.capa - 1) == '\r') {
-        newlines++;
+    if (pos < len) {
+        /* will be negative position. no way */
+        if (!discard_rbuf) return;
+        goto end;
     }
 
-    for (i = 0; i < fptr->rbuf.len; i++) {
-        if (*p == '\n') newlines++;
-        if (extra_max == newlines) break;
-        p++;
-    }
+    // With the fd in textmode, _read() reads up to capa bytes and converts
+    // '\r\n' to '\r' until '\x1A' is encountered.
+    // At last, that returns converted length(= off+len of rbuf).
+    //
+    //                off             len                 filled_last
+    // rbuf ==========*****************--------------------
+    //                ^                        ^          physical pos
+    //             IO#pos            extra bytes to scan
+    //
+    // To determine the file position corresponding to the start point of
+    // the rbuf, we need to search for the number of bytes removed.
 
-    buf = ALLOC_N(char, fptr->rbuf.len + newlines);
-    while (newlines >= 0) {
-        r = lseek(fptr->fd, pos - fptr->rbuf.len - newlines, SEEK_SET);
-        if (newlines == 0) break;
+    const int filled_last = (pos < fptr->rbuf.capa) ?
+        (int)pos : fptr->rbuf.capa;
+    const int extra_max = filled_last - (fptr->rbuf.off + len);
+    int extra = extra_max;
+
+    buf = ALLOC_N(char, len + extra);
+    while (extra >= 0) {
+        r = lseek(fptr->fd, pos - (len + extra), SEEK_SET);
+        if (extra == 0) break;
         if (r < 0) {
-            newlines--;
+            extra--;
             continue;
         }
-        read_size = _read(fptr->fd, buf, fptr->rbuf.len + newlines);
+        read_size = _read(fptr->fd, buf, len + extra);
         if (read_size < 0) {
             int e = errno;
-            free(buf);
+            ruby_xfree(buf);
             rb_syserr_fail_path(e, fptr->pathv);
         }
-        if (read_size == fptr->rbuf.len) {
+        if (read_size <= len) {
+            // if read_size < len, something is wrong but
+            // ultimately it's impossible to respond.
             lseek(fptr->fd, r, SEEK_SET);
             break;
         }
-        else {
-            newlines--;
+        else
+        {
+            // Adjust the amount that was over-unreaded.
+            // In the next reading, decrease in read_size will be
+            // between (read_size - len) / 2 and (read_size - len)
+            // due to number of '\r\n' affected.
+            extra -= read_size - len;
         }
     }
-    free(buf);
+    ruby_xfree(buf);
   end:
     fptr->rbuf.off = 0;
     fptr->rbuf.len = 0;
@@ -963,6 +978,18 @@ io_ungetbyte(VALUE str, rb_io_t *fptr)
         rb_raise(rb_eIOError, "ungetbyte failed");
     }
     if (fptr->rbuf.off < len) {
+#if RUBY_CRLF_ENVIRONMENT
+        if (rb_w32_fd_is_text(fptr->fd)) {
+            // For io_unread to be functional, the size of the buffer
+            // beyond off+len must be preserved.
+            // Synchronize the file position with the end of data in the buffer
+            // by calling io_unread before breaking this condition.
+            int roff = fptr->rbuf.off, rlen = fptr->rbuf.len;
+            flush_before_seek(fptr, false);
+            fptr->rbuf.off = roff;
+            fptr->rbuf.len = rlen;
+        }
+#endif
         MEMMOVE(fptr->rbuf.ptr+fptr->rbuf.capa-fptr->rbuf.len,
                 fptr->rbuf.ptr+fptr->rbuf.off,
                 char, fptr->rbuf.len);
