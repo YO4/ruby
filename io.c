@@ -630,8 +630,6 @@ static void
 io_unread(rb_io_t *fptr, bool discard_rbuf)
 {
     rb_off_t r, pos;
-    ssize_t read_size;
-    char *buf;
 
     rb_io_check_closed(fptr);
     if ((fptr->rbuf.len == 0 && !rb_w32_fd_is_text(fptr->fd)) ||
@@ -660,6 +658,8 @@ io_unread(rb_io_t *fptr, bool discard_rbuf)
     }
 
     const int len = fptr->rbuf.len;
+    int extra;
+    char *buf;
 
     if (pos < len) {
         /* will be negative position. no way */
@@ -667,52 +667,98 @@ io_unread(rb_io_t *fptr, bool discard_rbuf)
         goto end;
     }
 
-    // With the fd in textmode, _read() reads up to capa bytes and converts
-    // '\r\n' to '\r' until '\x1A' is encountered.
-    // At last, that returns converted length(= off+len of rbuf).
-    //
-    //                off             len                 filled_last
-    // rbuf ==========*****************--------------------
-    //                ^                        ^          physical pos
-    //             IO#pos            extra bytes to scan
-    //
-    // To determine the file position corresponding to the start point of
-    // the rbuf, we need to search for the number of bytes removed.
+//fprintf(stderr, "(%d %d %d)", fptr->rbuf.off, len, (int)pos);
+    if (fptr->rbuf.off + len != fptr->rbuf.capa) {
+        // With the fd in textmode, _read() reads up to capa bytes and converts
+        // '\r\n' to '\r' until '\x1A' is encountered.
+        // At last, that returns converted length(= off+len of rbuf).
+        //
+        //                off             len                 filled_last
+        // rbuf ==========*****************--------------------
+        //                ^                        ^          physical pos
+        //             IO#pos            extra bytes to scan
+        //
+        // To determine the file position corresponding to the start point of
+        // the rbuf, we need to search for the number of bytes removed.
 
-    const int filled_last = (pos < fptr->rbuf.capa) ?
-        (int)pos : fptr->rbuf.capa;
-    const int extra_max = filled_last - (fptr->rbuf.off + len);
-    int extra = extra_max;
+        const int filled_last = (pos < fptr->rbuf.capa) ?
+            (int)pos : fptr->rbuf.capa;
+        const int extra_max = filled_last - (fptr->rbuf.off + len);
+        extra = extra_max;
+    }
+    else {
+        if (len == 0) return;
+        // No extra bytes in rbuf. Physical file pos points to the rbuf tail.
+        // We still need to handle cases where the read '\n' is ungetbyte'd.
 
-    buf = ALLOC_N(char, len + extra);
-    while (extra >= 0) {
-        r = lseek(fptr->fd, pos - (len + extra), SEEK_SET);
-        if (extra == 0) break;
-        if (r < 0) {
-            extra--;
-            continue;
+        char *p = fptr->rbuf.ptr + fptr->rbuf.off;
+        const int extra_max = (pos - len < len) ? (int)(pos - len) : len;
+        extra = 0;
+        if (extra_max) {
+            for (int i = 0; i < len; i++) {
+                if (p[i] == '\n') {
+                    extra++;
+                    if (extra == extra_max) break;
+                }
+            }
         }
-        read_size = _read(fptr->fd, buf, len + extra);
+    }
+//fprintf(stderr, "(%d %d %d)", len, (int)pos, extra);
+    if (0 == extra) {
+        lseek(fptr->fd, pos - len, SEEK_SET);
+        goto end;
+    }
+
+    {
+        // Read the candidate range in binary mode
+        // and calculate the file position corresponding to the rbuf position.
+
+        lseek(fptr->fd, pos - (len + extra), SEEK_SET);
+        if (0 == extra) goto end;
+        buf = ALLOC_N(char, len + extra);
+        setmode((fptr)->fd, O_BINARY);
+        int read_size = _read(fptr->fd, buf, len + extra);
+        setmode((fptr)->fd, O_TEXT);
+
         if (read_size < 0) {
             int e = errno;
             ruby_xfree(buf);
+            lseek(fptr->fd, pos, SEEK_SET);
             rb_syserr_fail_path(e, fptr->pathv);
         }
-        if (read_size <= len) {
-            // if read_size < len, something is wrong but
-            // ultimately it's impossible to respond.
-            lseek(fptr->fd, r, SEEK_SET);
-            break;
+    }
+
+    if (fptr->rbuf.off + len != fptr->rbuf.capa) {
+        // search CTRLZ in extra bytes
+        char *p = memchr(buf + len, '\x1A', extra);
+        if (p) {
+//fprintf(stderr, "(%d %d %d)", len, (int)(p - buf), (int)(p - buf) - len);
+            pos -= (len + extra) - (p - buf);
+            lseek(fptr->fd, pos, SEEK_SET);
+            extra = (p - buf) - len;
         }
-        else
-        {
-            // Adjust the amount that was over-unreaded.
-            // In the next reading, decrease in read_size will be
-            // between (read_size - len) / 2 and (read_size - len)
-            // due to number of '\r\n' affected.
-            extra -= read_size - len;
+        if (0 == extra) {
+            ruby_xfree(buf);
+            lseek(fptr->fd, pos - len, SEEK_SET);
+            goto end;
         }
     }
+    // CTRLZ check done. This allows early return.
+    if (0 == len) {
+        ruby_xfree(buf);
+        lseek(fptr->fd, pos, SEEK_SET);
+        return;
+    }
+
+    int i, chars_found = 0;
+    for (i = len + extra - 1 - (buf[len + extra - 1] == '\r'); i > 0; i--) {
+        if (buf[i] == '\n' && buf[i - 1] == '\r')
+            i--;
+        if (++chars_found == len)
+            break;
+    }
+//fprintf(stderr, "(%d)", i);
+    lseek(fptr->fd, pos - (len + extra) + i, SEEK_SET);
     ruby_xfree(buf);
   end:
     fptr->rbuf.off = 0;
@@ -2704,10 +2750,10 @@ io_fillbuf(rb_io_t *fptr)
             rb_syserr_fail_path(e, path);
         }
         if (r > 0) rb_io_check_closed(fptr);
-        fptr->rbuf.off = 0;
-        fptr->rbuf.len = (int)r; /* r should be <= rbuf_capa */
         if (r == 0)
             return -1; /* EOF */
+        fptr->rbuf.off = 0;
+        fptr->rbuf.len = (int)r; /* r should be <= rbuf_capa */
     }
     return 0;
 }
@@ -3112,7 +3158,11 @@ io_bufread(char *ptr, long len, rb_io_t *fptr)
     long n = len;
     long c;
 
-    if (READ_DATA_PENDING(fptr) == 0) {
+    if (READ_DATA_PENDING(fptr) == 0 &&
+#if RUBY_CRLF_ENVIRONMENT
+        !rb_w32_fd_is_text(fptr->fd) &&
+#endif
+        1) {
         while (n > 0) {
           again:
             rb_io_check_closed(fptr);
