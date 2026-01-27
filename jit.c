@@ -61,7 +61,7 @@ rb_iseq_opcode_at_pc(const rb_iseq_t *iseq, const VALUE *pc)
 {
     // YJIT should only use iseqs after AST to bytecode compilation.
     // (Certain non-default interpreter configurations never set ISEQ_TRANSLATED)
-    if (OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE) {
+    if (OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE || OPT_TAILCALL_THREADED_CODE) {
         RUBY_ASSERT_ALWAYS(FL_TEST_RAW((VALUE)iseq, ISEQ_TRANSLATED));
     }
 

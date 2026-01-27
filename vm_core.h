@@ -179,6 +179,16 @@ void *rb_register_sigaltstack(void *);
 #include THREAD_IMPL_H
 #define RUBY_VM_THREAD_MODEL 2
 
+#if defined(__clang__) && __clang_major__ >= 13
+#  define RB_VM_MUSTTAIL __attribute__((musttail))
+#elif defined(__GNUC__) && __GNUC__ >= 15
+#  define RB_VM_MUSTTAIL __attribute__((musttail))
+#elif defined(_MSC_VER) && _MSC_VER >= 1944 && defined(__STDC_VERSION__ ) && __STDC_VERSION__ >= 202312L
+#  define RB_VM_MUSTTAIL [[msvc::musttail]]
+#else
+#  undef RB_VM_MUSTTAIL
+#endif
+
 /*****************/
 /* configuration */
 /*****************/
@@ -205,10 +215,17 @@ void *rb_register_sigaltstack(void *);
 
 /* call threaded code */
 #if    OPT_CALL_THREADED_CODE
-#if    OPT_DIRECT_THREADED_CODE
-#undef OPT_DIRECT_THREADED_CODE
-#endif /* OPT_DIRECT_THREADED_CODE */
+#if    OPT_TAILCALL_THREADED_CODE
+#undef OPT_TAILCALL_THREADED_CODE
+#endif /* OPT_TAILCALL_THREADED_CODE */
 #endif /* OPT_CALL_THREADED_CODE */
+
+/* tailcall threaded code */
+#if OPT_TAILCALL_THREADED_CODE
+#ifndef RB_VM_MUSTTAIL
+#error musttail attribute not supported by this compiler.
+#endif
+#endif
 
 void rb_vm_encoded_insn_data_table_init(void);
 typedef unsigned long rb_num_t;

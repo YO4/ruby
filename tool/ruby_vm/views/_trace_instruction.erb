@@ -17,5 +17,7 @@ INSN_ENTRY(<%= insn.name %>)
 %   end
     <%= 'ADD_PC(1);' if insn.name == 'trace_opt_neq' %>
     DISPATCH_ORIGINAL_INSN(<%= jump_dest || insn.jump_destination %>);
+#if !(OPT_DIRECT_THREADED_CODE || OPT_TOKEN_THREADED_CODE || OPT_TAILCALL_THREADED_CODE)
     END_INSN(<%= insn.name %>);
+#endif
 }

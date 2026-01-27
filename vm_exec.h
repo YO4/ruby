@@ -40,7 +40,7 @@ typedef rb_iseq_t *ISEQ;
 #if defined(DISPATCH_XXX)
 error !
 /************************************************/
-#elif OPT_CALL_THREADED_CODE
+#elif OPT_CALL_THREADED_CODE || OPT_TAILCALL_THREADED_CODE
 
 #define LABEL(x)  insn_func_##x
 #define ELABEL(x)
@@ -48,15 +48,34 @@ error !
 
 #define INSN_ENTRY(insn) \
   static rb_control_frame_t * \
-    FUNC_FASTCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp) {
+    FUNC_FASTCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp)
 
-#define END_INSN(insn) return reg_cfp;}
+#if OPT_CALL_THREADED_CODE
+#define END_INSN(insn) return reg_cfp;
 
 #define NEXT_INSN() return reg_cfp;
 
 #define START_OF_ORIGINAL_INSN(x) /* ignore */
 #define DISPATCH_ORIGINAL_INSN(x) return LABEL(x)(ec, reg_cfp);
 
+#elif OPT_TAILCALL_THREADED_CODE
+static NOINLINE(rb_control_frame_t *
+FUNC_FASTCALL(terminate_tailcall)(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp))
+{
+    return reg_cfp;
+}
+
+#define END_INSN(insn) \
+    if (!reg_cfp) RETURN_EXEC_CORE(Qnil); \
+    RB_VM_MUSTTAIL return ((rb_insn_func_t) (*GET_PC()))(ec, reg_cfp);
+
+#define NEXT_INSN() RB_VM_MUSTTAIL return ((rb_insn_func_t) (*GET_PC()))(ec, reg_cfp);
+
+#define RETURN_EXEC_CORE(val) RB_VM_MUSTTAIL return terminate_tailcall(ec, (rb_control_frame_t *)(val))
+
+#define START_OF_ORIGINAL_INSN(x) /* ignore */
+#define DISPATCH_ORIGINAL_INSN(x) RB_VM_MUSTTAIL return LABEL(x)(ec, reg_cfp);
+#endif
 /************************************************/
 #elif OPT_TOKEN_THREADED_CODE || OPT_DIRECT_THREADED_CODE
 /* threaded code with gcc */
@@ -123,6 +142,8 @@ error !
 
 #define NEXT_INSN() TC_DISPATCH(__NEXT_INSN__)
 
+#define RETURN_EXEC_CORE(val) return (val)
+
 /************************************************/
 #else /* no threaded code */
 /* most common method */
@@ -147,6 +168,8 @@ default:                        \
 
 #define NEXT_INSN() goto first
 
+#define RETURN_EXEC_CORE(val) return (val)
+
 #endif
 
 #ifndef START_OF_ORIGINAL_INSN
@@ -162,7 +185,7 @@ default:                        \
     return 0; \
 } while (0)
 #else
-#define THROW_EXCEPTION(exc) return (VALUE)(exc)
+#define THROW_EXCEPTION(exc) RETURN_EXEC_CORE((VALUE)(exc))
 #endif
 
 // Run the interpreter from the JIT
