@@ -6,7 +6,9 @@ INSN_ENTRY(<%= insn.name %>)
     START_OF_ORIGINAL_INSN(<%= insn.name %>);
     rb_zjit_profile_insn(BIN(<%= insn.jump_destination %>), ec);
     DISPATCH_ORIGINAL_INSN(<%= insn.jump_destination %>);
+#if !(OPT_DIRECT_THREADED_CODE || OPT_TOKEN_THREADED_CODE || OPT_TAILCALL_THREADED_CODE)
     END_INSN(<%= insn.name %>);
+#endif
 }
 
 #endif
