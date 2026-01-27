@@ -182,6 +182,13 @@ COROUTINE_H = @X_COROUTINE_H@
 COROUTINE_OBJ = $(COROUTINE_H:.h=.$(OBJEXT))
 COROUTINE_SRC = @X_COROUTINE_SRC@
 
+COMPARE_RUBY = $(BASERUBY)
+BENCH_RUBY = $(RUNRUBY)
+BENCH_OPTS = --output=markdown --output-compare -v
+ITEM =
+ARGS = $$(find $(srcdir)/benchmark -maxdepth 1 -name '$(ITEM)' -o -name '*$(ITEM)*.yml' -o -name '*$(ITEM)*.rb' | sort)
+OPTS =
+
 #### End of system configuration section. ####
 
 MAJOR=	@MAJOR@
@@ -639,6 +646,13 @@ update-benchmark-driver:
 	$(Q) $(tooldir)/git-refresh -C $(srcdir)/benchmark $(Q1:0=-q) \
 		--branch $(BENCHMARK_DRIVER_GIT_REF) \
 		$(BENCHMARK_DRIVER_GIT_URL) benchmark-driver $(GIT_OPTS)
+
+# See benchmark/README.md for details.
+benchmark: miniruby$(EXEEXT) update-benchmark-driver PHONY
+	$(BASERUBY) -rrubygems -I$(srcdir)/benchmark/lib $(srcdir)/benchmark/benchmark-driver/exe/benchmark-driver \
+	            --executables="compare-ruby::$(COMPARE_RUBY) -I$(EXTOUT)/common --disable-gem" \
+	            --executables="built-ruby::$(BENCH_RUBY) --disable-gem" \
+	            $(BENCH_OPTS) $(ARGS) $(OPTS)
 
 update-known-errors:
 	errno --list | \
