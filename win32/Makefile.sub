@@ -409,6 +409,28 @@ STACK = $(STACK),$(STACK_COMMIT)
 !endif
 ORGLIBPATH = $(LIB)
 
+# benchmark related
+COMPARE_RUBY = $(BASERUBY)
+BENCH_RUBY = $(RUNRUBY)
+BENCH_OPTS = --output=markdown --output-compare -v
+!ifdef ITEM
+!if exist("$(srcdir)/benchmark/$(ITEM)")
+ARGS = $(ARGS) "$(srcdir)/benchmark/$(ITEM)"
+!endif
+!if [dir /B "$(srcdir:/=\)\benchmark\*$(ITEM:/=\)*.yml" >NUL 2>&1] == 0
+ARGS = $(ARGS) "$(srcdir)/benchmark/*$(ITEM)*.yml"
+!endif
+!if [dir /B "$(srcdir:/=\)\benchmark\*$(ITEM:/=\)*.rb" >NUL 2>&1] == 0
+ARGS = $(ARGS) "$(srcdir)/benchmark/*$(ITEM)*.rb"
+!endif
+!else
+ARGS = "$(srcdir)/benchmark/*.yml" "$(srcdir)/benchmark/*.rb"
+!endif
+OPTS =
+
+compare_ruby = $(COMPARE_RUBY:\=/)
+bench_ruby = $(BENCH_RUBY:\=/)
+
 #### End of system configuration section. ####
 
 LIBRUBY_A     = $(RUBY_SO_NAME)-static.lib
