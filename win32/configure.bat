@@ -24,6 +24,7 @@ set XLDFLAGS=
 set pathlist=
 set config_make=confargs~%RANDOM%.mak
 set confargs=%config_make:.mak=.c%
+set opt_dir_specified=
 echo>%config_make% # CONFIGURE
 (
   echo #define $ $$ //
@@ -255,6 +256,7 @@ goto :loop ;
 :gmp-dir
 :opt-dir
   set opt=%~2
+  set opt_dir_specified=1
   for %%I in (%opt:;= %) do (
     set d=%%I
     call pushd %%d:/=\%% && (
@@ -295,6 +297,14 @@ goto :loop ;
   del %confargs% %config_make%
 goto :exit
 :end
+if NOT "%opt_dir_specified%" == "1" if NOT "%VSCMD_ARG_TGT_ARCH%" == "" (
+  pushd %WIN32DIR:/=\%\..
+  call set d=%%CD:\=/%%/vcpkg_installed/%VSCMD_ARG_TGT_ARCH%-windows
+  popd
+  call echo>>%confargs%  --with-opt-dir=%%d%%
+  call set XINCFLAGS= -I%%d%%/include
+  call set XLDFLAGS= -libpath:%%d%%/lib
+)
 (
   echo //
   echo configure_args = CONFIGURE_ARGS
