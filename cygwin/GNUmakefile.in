@@ -43,6 +43,10 @@ endif
 
 WPROGRAM = $(RUBYW_INSTALL_NAME)$(EXEEXT)
 
+ifeq ($(target_os),mingw32)
+compare_ruby := $$(shell cygpath -ma $(firstword $(compare_ruby))) $(wordlist 2, $(words $(compare_ruby)), $(compare_ruby))
+endif
+
 include $(srcdir)/template/GNUmakefile.in
 
 SOLIBS := $(DLL_BASE_NAME).res.$(OBJEXT) $(SOLIBS)

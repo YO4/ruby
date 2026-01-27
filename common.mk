@@ -1385,18 +1385,11 @@ bisect: PHONY
 bisect-ruby: PHONY
 	$(tooldir)/bisect.sh ruby $(srcdir)
 
-COMPARE_RUBY = $(BASERUBY)
-BENCH_RUBY = $(RUNRUBY)
-BENCH_OPTS = --output=markdown --output-compare -v
-ITEM =
-ARGS = $$(find $(srcdir)/benchmark -maxdepth 1 -name '$(ITEM)' -o -name '*$(ITEM)*.yml' -o -name '*$(ITEM)*.rb' | sort)
-OPTS =
-
 # See benchmark/README.md for details.
 benchmark: miniruby$(EXEEXT) update-benchmark-driver PHONY
 	$(BASERUBY) -rrubygems -I$(srcdir)/benchmark/lib $(srcdir)/benchmark/benchmark-driver/exe/benchmark-driver \
-	            --executables="compare-ruby::$(COMPARE_RUBY) -I$(EXTOUT)/common --disable-gem" \
-	            --executables="built-ruby::$(BENCH_RUBY) --disable-gem" \
+	            --executables="compare-ruby::$(compare_ruby) -I$(EXTOUT)/common --disable-gem" \
+	            --executables="built-ruby::$(bench_ruby) --disable-gem" \
 	            $(BENCH_OPTS) $(ARGS) $(OPTS)
 
 run.gdb:

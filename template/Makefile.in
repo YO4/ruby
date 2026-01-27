@@ -182,6 +182,16 @@ COROUTINE_H = @X_COROUTINE_H@
 COROUTINE_OBJ = $(COROUTINE_H:.h=.$(OBJEXT))
 COROUTINE_SRC = @X_COROUTINE_SRC@
 
+COMPARE_RUBY = $(BASERUBY)
+BENCH_RUBY = $(RUNRUBY)
+BENCH_OPTS = --output=markdown --output-compare -v
+ITEM =
+ARGS = $$(find $(srcdir)/benchmark -maxdepth 1 -name '$(ITEM)' -o -name '*$(ITEM)*.yml' -o -name '*$(ITEM)*.rb' | sort)
+OPTS =
+
+compare_ruby = $(COMPARE_RUBY)
+bench_ruby = $(BENCH_RUBY)
+
 #### End of system configuration section. ####
 
 MAJOR=	@MAJOR@
