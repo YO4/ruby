@@ -1158,10 +1158,25 @@ $(LIBRUBY_SO):	$(LIBRUBY_A) $(DLDOBJS) $(RUBYDEF) $(RUBY_SO_NAME).res
 			$(LIBRUBY_DLDFLAGS)
 		@$(RM) dummy.lib dummy.exp
 
+!if 0
+
 $(RUBYDEF):	$(LIBRUBY_A) $(RBCONFIG)
 		$(ECHO) generating $(@:\=/)
 		$(Q) $(BOOTSTRAPRUBY_COMMAND) $(srcdir)/win32/mkexports.rb \
 		  -output=$@ -arch=$(ARCH) $(LIBRUBY_A)
+!else
+
+$(RUBYDEF):	$(LIBRUBY_A) $(RBCONFIG) 
+		$(ECHO) generating $(@:\=/)
+		$(Q) $(LDSHARED) $(LIBRUBY_A) \
+			$(SOLIBS) $(EXTSOLIBS) $(LIBS) \
+			$(OUTFLAG)$(@B).dll -link $(LDFLAGS) $(XLDFLAGS) \
+			$(EXTLDFLAGS) -implib:dummydef.lib \
+			-wholearchive:$(LIBRUBY_A) -map:$(@B).map -opt:noref -opt:noicf
+		$(Q) $(BOOTSTRAPRUBY_COMMAND) $(srcdir)/win32/mkexports.rb \
+		  -output=$@ -arch=$(ARCH) $(@B).map
+
+!endif
 
 {$(win_srcdir)}.def.lib:
 		$(Q) $(AR) $(ARFLAGS)$@ -def:$<

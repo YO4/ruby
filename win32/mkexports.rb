@@ -7,7 +7,7 @@ module RbConfig
 end
 
 class Exports
-  PrivateNames = /(?:Init_|InitVM_|ruby_static_id_|threadptr|_ec_|DllMain\b)/
+  PrivateNames = /(?:Init_|InitVM_|ruby_static_id_|_threadptr_|_ec_|DllMain\b)/
 
   def self.create(*args, &block)
     platform = RUBY_PLATFORM
@@ -96,20 +96,58 @@ end
 
 class Exports::Mswin < Exports
   def each_line(objs, &block)
-    IO.popen(%w"dumpbin -symbols -exports" + objs) do |f|
-      f.each(&block)
+#    IO.popen(%w"dumpbin -linkermember:1" + objs) do |f|
+    objs.each do |o|
+      open(o) do |f|
+        f.each(&block)
+      end
     end
   end
 
   def each_export(objs)
     noprefix = ($arch ||= nil and /^(sh|i\d86)/ !~ $arch)
     objs = objs.collect {|s| s.tr('/', '\\')}
-    filetype = nil
+    libname = RbConfig::CONFIG["LIBRUBY_A"]
+    libname[/\.lib$/]=""
+    publics = false
+    started = false
+    finished = false
     objdump(objs) do |l|
-      if (filetype = l[/^File Type: (.+)/, 1])..(/^\f/ =~ l)
-        case filetype
+      next if finished
+      l.chomp!
+      finished ||= started && l == ""
+      started ||= publics && l != ""
+      publics ||= /^\s+Address\s+Publics by Value\s+Rva\+Base\s+Lib:Object$/.match?(l)
+
+      if started
+        /\A\s+\h+:\h+\s+(#{noprefix ? "" : "_"}[a-zA-Z_]\w+#{noprefix ? "" : /(?:@\d+)?/})\s+\h+(?:\s+(f)\s*i?\s+|\s*)(?:#{libname}:[\w-]+\.[\w-]+|<common>)\z/.match(l) do |m|
+          sym, f = m[1], m[2]
+          if !noprefix && /^[@_]/.match?(sym) && !/@\d+$/.match?(sym)
+            sym.sub!(/^[@_]/, '')
+          end
+          next if /(?:_local_stdio_printf_options|\Av(f|sn?)?printf(_s)?(_l)?)\Z/.match?(sym)
+          next if /\A_[^@]*\z|^#{PrivateNames}/o.match?(sym)
+          next if /@[[:xdigit:]]{8,32}\z/.match?(sym)
+          yield sym, f != "f"
+        end
+      end
+      next
+
+      symbols ||= /^\s*\d+\spublic symbols$/.match? l
+      symbols &&= !(/^Archive member name/.match? l)
+      if symbols
+        l.chomp!
+        next if l == ""
+
+        /^\s*\h+\s(#{noprefix ? "" : "_"}[a-zA-Z_]\w+)$/.match(l) do |m|
+          is_data = ""
+          next if /^_?#{PrivateNames}/o.match?(m[1])
+          yield m[1], nil
+        end
+        next
+
+        case symbols
         when /OBJECT/, /LIBRARY/
-          l.chomp!
           next if (/^ .*\(pick any\)$/ =~ l)...true
           next if /^[[:xdigit:]]+ 0+ UNDEF / =~ l
           next unless /External/ =~ l

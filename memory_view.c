@@ -31,6 +31,10 @@
 
 // Exported Object Registry
 
+#ifdef _MSC_VER
+#pragma comment(linker, "/export:rb_memory_view_exported_object_registry,DATA"))
+#endif
+
 static st_table *exported_object_table = NULL;
 VALUE rb_memory_view_exported_object_registry = Qundef;
 
