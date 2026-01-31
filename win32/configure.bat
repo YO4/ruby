@@ -134,6 +134,7 @@ goto :loop ;
 goto :loop ;
 :witharg
   if "%opt%" == "--with-static-linked-ext" goto :extstatic
+  if "%opt%" == "--with-vcpkg" goto :vcpkg
   if "%eq%" == "" (set "arg=%~1" & shift)
   if not "%arg%" == "" (
     echo>>%confargs%  "%opt%=%arg:$=$$%" \
@@ -148,7 +149,6 @@ goto :loop ;
   if "%opt%" == "--with-gmp-dir" goto :opt-dir
   if "%opt%" == "--with-gmp" goto :gmp
   if "%opt%" == "--with-destdir" goto :destdir
-  if "%opt%" == "--with-vcpkg" goto :vcpkg
 goto :loop ;
 :ntver
   ::- For version constants, see
@@ -212,12 +212,17 @@ goto :loop ;
   if not "%arg%" == "" goto :optdir-loop
 goto :loop ;
 :vcpkg
+  echo %eq%
+  if "%~1" == "no" (set "arg=%~1" & shift)
+  set d=
   if not "%arg%" == "no" if not "%VSCMD_ARG_TGT_ARCH%" == "" (
     pushd %WIN32DIR:/=\%\..
-    call set "optdirs=%optdirs%;%%CD:\=/%%/vcpkg_installed/%VSCMD_ARG_TGT_ARCH%-windows"
+    set "opt=--with-opt-dir"
+    call set "arg=%%CD:\=/%%/vcpkg_installed/%VSCMD_ARG_TGT_ARCH%-windows"
     popd
+    call set "optdirs=%optdirs%;%%arg%%"
   )
-goto :loop ;
+goto :loopend ;
 :help
   echo Configuration:
   echo   --help                  display this help
