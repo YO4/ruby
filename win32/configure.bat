@@ -170,7 +170,7 @@ goto :loopend ;
   set "pathlist=%pathlist%%arg:\=/%;"
 goto :loopend ;
 :extstatic
-  if "%eq%" == "" (set "arg=static" & shift)
+  if "%eq%" == "" set "arg=static"
   echo>> %config_make% EXTSTATIC = %arg%
 goto :loopend ;
 :baseruby
@@ -205,7 +205,7 @@ goto :loop ;
   :optdir-loop
   for /f "delims=; tokens=1,*" %%I in ("%arg%") do (set "d=%%I" & set "arg=%%J")
     pushd %d:/=\% && (
-      set "optdirs=%optdirs%;%CD:\=/%"
+      call set "optdirs=%optdirs%;%%CD:\=/%%"
       popd
     )
   if not "%arg%" == "" goto :optdir-loop
