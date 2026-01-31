@@ -148,6 +148,7 @@ goto :loop ;
   if "%opt%" == "--with-gmp-dir" goto :opt-dir
   if "%opt%" == "--with-gmp" goto :gmp
   if "%opt%" == "--with-destdir" goto :destdir
+  if "%opt%" == "--with-vcpkg" goto :vcpkg
 goto :loop ;
 :ntver
   ::- For version constants, see
@@ -210,6 +211,13 @@ goto :loop ;
     )
   if not "%arg%" == "" goto :optdir-loop
 goto :loop ;
+:vcpkg
+  if not "%arg%" == "no" if not "%VSCMD_ARG_TGT_ARCH%" == "" (
+    pushd %WIN32DIR:/=\%\..
+    call set "optdirs=%optdirs%;%%CD:\=/%%/vcpkg_installed/%VSCMD_ARG_TGT_ARCH%-windows"
+    popd
+  )
+goto :loop ;
 :help
   echo Configuration:
   echo   --help                  display this help
@@ -224,6 +232,7 @@ goto :loop ;
   echo   --with-ext="a,b,..."    use extensions a, b, ...
   echo   --without-ext="a,b,..." ignore extensions a, b, ...
   echo   --with-opt-dir="DIR-LIST" add optional headers and libraries directories separated by ';'
+  echo   --with-vcpkg            add vcpkg installed headers and libraries directory
   echo   --disable-install-doc   do not install rdoc indexes during install
   echo   --with-ntver=0xXXXX     target NT version (shouldn't use with old SDK)
   echo   --with-ntver=_WIN32_WINNT_XXXX
