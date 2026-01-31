@@ -21,7 +21,11 @@
 #endif
 
 #if defined(__x86_64__) && !defined(_ILP32) && defined(__GNUC__)
+#if defined(RUBY_INTEL_SYNTAX_ASSEMBLER)
+#define SET_MACHINE_STACK_END(p) __asm__ __volatile__ ("mov\t%0, rsp" : "=r" (*(p)))
+#else
 #define SET_MACHINE_STACK_END(p) __asm__ __volatile__ ("movq\t%%rsp, %0" : "=r" (*(p)))
+#endif
 #elif defined(__i386) && defined(__GNUC__)
 #define SET_MACHINE_STACK_END(p) __asm__ __volatile__ ("movl\t%%esp, %0" : "=r" (*(p)))
 #elif (defined(__powerpc__) || defined(__powerpc64__)) && defined(__GNUC__) && !defined(_AIX) && !defined(__APPLE__) // Not Apple is NEEDED to unbreak ppc64 build on Darwin. Don't ask.

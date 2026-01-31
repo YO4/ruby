@@ -921,6 +921,15 @@ AS_IF([test "$GCC" = yes], [
                 ])
             ])
         ])
+    ],[x64|x86_64|[i[3-6]86*]],[
+        # GCC with the MCF thread model using intel syntax assembler.
+        AC_MSG_CHECKING([for -S assembler syntax])
+        AS_IF([$CC -S -xc -o- - < /dev/null | grep \.intel_syntax > /dev/null], [
+	        RUBY_APPEND_OPTION(XCFLAGS, -DRUBY_INTEL_SYNTAX_ASSEMBLER)
+	        AC_MSG_RESULT(["intel"])
+	    ],[
+	        AC_MSG_RESULT(["att"])
+        ])
     ])
 
     AS_CASE("${compress_debug_sections:-zlib}",
