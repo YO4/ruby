@@ -34,6 +34,11 @@ struct rb_thread_sched {
     HANDLE lock;
 };
 
+#ifdef RB_THREAD_LOCAL_SPECIFIER
+NOINLINE(void rb_current_ec_set(struct rb_execution_context_struct *));
+
+RUBY_EXTERN RB_THREAD_LOCAL_SPECIFIER struct rb_execution_context_struct *ruby_current_ec;
+#else
 typedef DWORD native_tls_key_t; // TLS index
 
 static inline void *
@@ -54,5 +59,6 @@ native_tls_set(native_tls_key_t key, void *ptr)
 RUBY_SYMBOL_EXPORT_BEGIN
 RUBY_EXTERN native_tls_key_t ruby_current_ec_key;
 RUBY_SYMBOL_EXPORT_END
+#endif
 
 #endif /* RUBY_THREAD_WIN32_H */

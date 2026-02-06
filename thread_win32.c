@@ -26,7 +26,11 @@
 #define ubf_timer_disarm() do {} while (0)
 #define ubf_list_atfork() do {} while (0)
 
+#ifdef RB_THREAD_LOCAL_SPECIFIER
+static RB_THREAD_LOCAL_SPECIFIER rb_thread_t *ruby_native_thread;
+#else
 static volatile DWORD ruby_native_thread_key = TLS_OUT_OF_INDEXES;
+#endif
 
 static int w32_wait_events(HANDLE *events, int count, DWORD timeout, rb_thread_t *th);
 
@@ -168,7 +172,11 @@ rb_thread_sched_destroy(struct rb_thread_sched *sched)
 rb_thread_t *
 ruby_thread_from_native(void)
 {
+#ifdef RB_THREAD_LOCAL_SPECIFIER
+    return ruby_native_thread;
+#else
     return TlsGetValue(ruby_native_thread_key);
+#endif
 }
 
 int
@@ -177,18 +185,25 @@ ruby_thread_set_native(rb_thread_t *th)
     if (th && th->ec) {
         rb_ractor_set_current_ec(th->ractor, th->ec);
     }
+#ifdef RB_THREAD_LOCAL_SPECIFIER
+    ruby_native_thread = th;
+    return 1;
+#else
     return TlsSetValue(ruby_native_thread_key, th);
+#endif
 }
 
 void
 Init_native_thread(rb_thread_t *main_th)
 {
+#ifndef RB_THREAD_LOCAL_SPECIFIER
     if ((ruby_current_ec_key = TlsAlloc()) == TLS_OUT_OF_INDEXES) {
         rb_bug("TlsAlloc() for ruby_current_ec_key fails");
     }
     if ((ruby_native_thread_key = TlsAlloc()) == TLS_OUT_OF_INDEXES) {
         rb_bug("TlsAlloc() for ruby_native_thread_key fails");
     }
+#endif
 
     // setup main thread
 
