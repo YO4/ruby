@@ -414,17 +414,10 @@ COMPARE_RUBY = $(BASERUBY)
 BENCH_RUBY = $(RUNRUBY)
 BENCH_OPTS = --output=markdown --output-compare -v
 !ifdef ITEM
-!if exist("$(srcdir)/benchmark/$(ITEM)")
-ARGS = $(ARGS) "$(srcdir)/benchmark/$(ITEM)"
+items = Dir.glob(%W($(ITEM)).map {|i| '%1$$s *%1$$s*.rb *%1$$s.yml'.%(i).split}.flatten , base: '$(srcdir)/benchmark')
+!if [$(BASERUBY) --disable-gem -e "puts 'ARGS = \\'; puts $(items).sort.map {|i| '$(srcdir)/benchmark/'+i+' \\'}" > benchmark_list.mk] == 0
+!include benchmark_list.mk
 !endif
-!if [dir /B "$(srcdir:/=\)\benchmark\*$(ITEM:/=\)*.yml" >NUL 2>&1] == 0
-ARGS = $(ARGS) "$(srcdir)/benchmark/*$(ITEM)*.yml"
-!endif
-!if [dir /B "$(srcdir:/=\)\benchmark\*$(ITEM:/=\)*.rb" >NUL 2>&1] == 0
-ARGS = $(ARGS) "$(srcdir)/benchmark/*$(ITEM)*.rb"
-!endif
-!else
-ARGS = "$(srcdir)/benchmark/*.yml" "$(srcdir)/benchmark/*.rb"
 !endif
 OPTS =
 
