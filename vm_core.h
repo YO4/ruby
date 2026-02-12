@@ -1393,8 +1393,13 @@ typedef VALUE CDHASH;
 #define FUNC_FASTCALL(x) x
 #endif
 
+#if !OPT_TAILCALL_THREADED_CODE
 typedef rb_control_frame_t *
   (FUNC_FASTCALL(*rb_insn_func_t))(rb_execution_context_t *, rb_control_frame_t *);
+#else
+typedef rb_control_frame_t *
+  (FUNC_FASTCALL(*rb_insn_func_t))(rb_execution_context_t *, rb_control_frame_t *, const VALUE *);
+#endif
 
 #define VM_TAGGED_PTR_SET(p, tag)  ((VALUE)(p) | (tag))
 #define VM_TAGGED_PTR_REF(v, mask) ((void *)((v) & ~mask))
