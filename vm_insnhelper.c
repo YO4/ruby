@@ -6649,7 +6649,13 @@ vm_once_dispatch(rb_execution_context_t *ec, ISEQ iseq, ISE is)
     }
 }
 
-static OFFSET
+#if OPT_TAILCALL_THREADED_CODE
+#define TAILCALL_NOINLINE RBIMPL_ATTR_NOINLINE()
+#else
+#define TAILCALL_NOINLINE
+#endif
+
+static OFFSET TAILCALL_NOINLINE
 vm_case_dispatch(CDHASH hash, OFFSET else_offset, VALUE key)
 {
     switch (OBJ_BUILTIN_TYPE(key)) {

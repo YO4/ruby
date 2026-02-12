@@ -117,6 +117,22 @@ rb_vm_get_insns_address_table(void)
 
 #else /* OPT_CALL_THREADED_CODE || OPT_TAILCALL_THREADED_CODE */
 
+#if OPT_TAILCALL_THREADED_CODE
+#undef  RESTORE_REGS
+#define RESTORE_REGS() \
+{ \
+  VM_REG_CFP = ec->cfp; \
+  reg_pc  = reg_cfp->pc; \
+}
+
+#undef  VM_REG_PC
+#undef  GET_PC
+#undef  SET_PC
+#define VM_REG_PC reg_pc
+#define GET_PC() (reg_pc)
+#define SET_PC(x) (reg_cfp->pc = VM_REG_PC = (x))
+#endif
+
 #include "vm.inc"
 #include "vmtc.inc"
 
@@ -131,7 +147,7 @@ static VALUE
 vm_exec_core(rb_execution_context_t *ec)
 {
     register rb_control_frame_t *reg_cfp = ec->cfp;
-    return (VALUE)((rb_insn_func_t) (*GET_PC()))(ec, reg_cfp);
+    return (VALUE)((rb_insn_func_t) (*reg_cfp->pc))(ec, reg_cfp, reg_cfp->pc);
 }
 #else
 static VALUE

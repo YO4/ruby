@@ -46,11 +46,11 @@ error !
 #define ELABEL(x)
 #define LABEL_PTR(x) &LABEL(x)
 
+#if OPT_CALL_THREADED_CODE
 #define INSN_ENTRY(insn) \
   static rb_control_frame_t * \
     FUNC_FASTCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp)
 
-#if OPT_CALL_THREADED_CODE
 #define END_INSN(insn) return reg_cfp;
 
 #define NEXT_INSN() return reg_cfp;
@@ -60,20 +60,24 @@ error !
 
 #elif OPT_TAILCALL_THREADED_CODE
 static rb_control_frame_t *
-FUNC_FASTCALL(terminate_tailcall)(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp)
+FUNC_FASTCALL(terminate_tailcall)(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *reg_pc)
 {
     return reg_cfp;
 }
 
+#define INSN_ENTRY(insn) \
+  static rb_control_frame_t * \
+    FUNC_FASTCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *reg_pc)
+
 #define END_INSN(insn) \
-    RB_VM_MUSTTAIL return ((rb_insn_func_t) (*GET_PC()))(ec, reg_cfp);
+    RB_VM_MUSTTAIL return ((rb_insn_func_t) (*GET_PC()))(ec, reg_cfp, reg_pc);
 
-#define NEXT_INSN() RB_VM_MUSTTAIL return ((rb_insn_func_t) (*GET_PC()))(ec, reg_cfp);
+#define NEXT_INSN() RB_VM_MUSTTAIL return ((rb_insn_func_t) (*GET_PC()))(ec, reg_cfp, reg_pc);
 
-#define RETURN_EXEC_CORE(val) RB_VM_MUSTTAIL return terminate_tailcall(ec, (rb_control_frame_t *)(val))
+#define RETURN_EXEC_CORE(val) RB_VM_MUSTTAIL return terminate_tailcall(ec, (rb_control_frame_t *)(val), reg_pc)
 
 #define START_OF_ORIGINAL_INSN(x) /* ignore */
-#define DISPATCH_ORIGINAL_INSN(x) RB_VM_MUSTTAIL return LABEL(x)(ec, reg_cfp);
+#define DISPATCH_ORIGINAL_INSN(x) RB_VM_MUSTTAIL return LABEL(x)(ec, reg_cfp, reg_pc);
 #endif
 /************************************************/
 #elif OPT_TOKEN_THREADED_CODE || OPT_DIRECT_THREADED_CODE
