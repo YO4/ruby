@@ -123,7 +123,10 @@ rb_vm_get_insns_address_table(void)
 { \
   VM_REG_CFP = ec->cfp; \
   reg_pc  = reg_cfp->pc; \
+  reg_sp  = reg_cfp->sp; \
 }
+#undef  RESTORE_REG_SP
+#define RESTORE_REG_SP() (reg_sp  = reg_cfp->sp)
 
 #undef  VM_REG_PC
 #undef  GET_PC
@@ -131,6 +134,15 @@ rb_vm_get_insns_address_table(void)
 #define VM_REG_PC reg_pc
 #define GET_PC() (reg_pc)
 #define SET_PC(x) (reg_cfp->pc = VM_REG_PC = (x))
+
+#undef  VM_REG_SP
+#undef  SET_SP
+#undef  INC_SP
+#undef  DEC_SP
+#define VM_REG_SP reg_sp
+#define SET_SP(x)  (VM_REG_SP  = (COLLECT_USAGE_REGISTER_HELPER(SP, SET, (x))), reg_cfp->sp = VM_REG_SP)
+#define INC_SP(x)  (VM_REG_SP += (COLLECT_USAGE_REGISTER_HELPER(SP, SET, (x))), reg_cfp->sp = VM_REG_SP)
+#define DEC_SP(x)  (VM_REG_SP -= (COLLECT_USAGE_REGISTER_HELPER(SP, SET, (x))), reg_cfp->sp = VM_REG_SP)
 #endif
 
 #include "vm.inc"
@@ -147,7 +159,7 @@ static VALUE
 vm_exec_core(rb_execution_context_t *ec)
 {
     register rb_control_frame_t *reg_cfp = ec->cfp;
-    return (VALUE)((rb_insn_func_t) (*reg_cfp->pc))(ec, reg_cfp, reg_cfp->pc);
+    return (VALUE)((rb_insn_func_t) (*reg_cfp->pc))(ec, reg_cfp, reg_cfp->pc, reg_cfp->sp);
 }
 #else
 static VALUE
