@@ -49,7 +49,7 @@ error !
 #if OPT_CALL_THREADED_CODE
 #define INSN_ENTRY(insn) \
   static rb_control_frame_t * \
-    FUNC_FASTCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp)
+    FUNC_INSNCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp)
 
 #define END_INSN(insn) return reg_cfp;
 
@@ -59,15 +59,15 @@ error !
 #define DISPATCH_ORIGINAL_INSN(x) return LABEL(x)(ec, reg_cfp);
 
 #elif OPT_TAILCALL_THREADED_CODE
-static rb_control_frame_t *
-FUNC_FASTCALL(terminate_tailcall)(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *reg_pc)
+static __attribute__((noinline)) rb_control_frame_t *
+FUNC_INSNCALL(terminate_tailcall)(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *reg_pc, VALUE *reg_sp)
 {
     return reg_cfp;
 }
 
 #define INSN_ENTRY(insn) \
   static rb_control_frame_t * \
-    FUNC_FASTCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *reg_pc)
+    FUNC_INSNCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *reg_pc)
 
 #define END_INSN(insn) \
     RB_VM_MUSTTAIL return ((rb_insn_func_t) (*GET_PC()))(ec, reg_cfp, reg_pc);

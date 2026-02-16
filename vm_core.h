@@ -225,6 +225,18 @@ void *rb_register_sigaltstack(void *);
 #ifndef RB_VM_MUSTTAIL
 #error musttail attribute not supported by this compiler.
 #endif
+
+#if defined(__clang__) && __clang_major__ >= 19
+#define FUNC_INSNCALL(x) __attribute__((preserve_none)) x
+
+#elif defined(_MSC_VER) && defined(_M_AMD64)
+#define FUNC_INSNCALL(x) __preserve_none x
+
+#endif
+#endif
+
+#ifndef FUNC_INSNCALL
+#define FUNC_INSNCALL(x) FUNC_FASTCALL(x)
 #endif
 
 void rb_vm_encoded_insn_data_table_init(void);
@@ -1392,10 +1404,10 @@ typedef VALUE CDHASH;
 
 #if !OPT_TAILCALL_THREADED_CODE
 typedef rb_control_frame_t *
-  (FUNC_FASTCALL(*rb_insn_func_t))(rb_execution_context_t *, rb_control_frame_t *);
+  (FUNC_INSNCALL(*rb_insn_func_t))(rb_execution_context_t *, rb_control_frame_t *);
 #else
 typedef rb_control_frame_t *
-  (FUNC_FASTCALL(*rb_insn_func_t))(rb_execution_context_t *, rb_control_frame_t *, const VALUE *);
+  (FUNC_INSNCALL(*rb_insn_func_t))(rb_execution_context_t *, rb_control_frame_t *, const VALUE *);
 #endif
 
 #define VM_TAGGED_PTR_SET(p, tag)  ((VALUE)(p) | (tag))
