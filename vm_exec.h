@@ -60,24 +60,24 @@ error !
 
 #elif OPT_TAILCALL_THREADED_CODE
 static VALUE
-FUNC_INSNCALL(terminate_tailcall)(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *reg_pc)
+FUNC_INSNCALL(terminate_tailcall)(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *reg_pc, VALUE *reg_sp)
 {
     return (VALUE)reg_cfp;
 }
 
 #define INSN_ENTRY(insn) \
   static VALUE \
-    FUNC_INSNCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *reg_pc)
+    FUNC_INSNCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *reg_pc, VALUE *reg_sp)
 
 #define END_INSN(insn) \
-    RB_VM_MUSTTAIL return ((rb_insn_func_t) (*GET_PC()))(ec, reg_cfp, reg_pc);
+    RB_VM_MUSTTAIL return ((rb_insn_func_t) (*GET_PC()))(ec, reg_cfp, reg_pc, reg_sp);
 
-#define NEXT_INSN() RB_VM_MUSTTAIL return ((rb_insn_func_t) (*GET_PC()))(ec, reg_cfp, reg_pc);
+#define NEXT_INSN() RB_VM_MUSTTAIL return ((rb_insn_func_t) (*GET_PC()))(ec, reg_cfp, reg_pc, reg_sp);
 
-#define RETURN_EXEC_CORE(val) RB_VM_MUSTTAIL return terminate_tailcall(ec, (rb_control_frame_t *)(val), reg_pc)
+#define RETURN_EXEC_CORE(val) RB_VM_MUSTTAIL return terminate_tailcall(ec, (rb_control_frame_t *)(val), reg_pc, reg_sp)
 
 #define START_OF_ORIGINAL_INSN(x) /* ignore */
-#define DISPATCH_ORIGINAL_INSN(x) RB_VM_MUSTTAIL return LABEL(x)(ec, reg_cfp, reg_pc);
+#define DISPATCH_ORIGINAL_INSN(x) RB_VM_MUSTTAIL return LABEL(x)(ec, reg_cfp, reg_pc, reg_sp);
 #endif
 /************************************************/
 #elif OPT_TOKEN_THREADED_CODE || OPT_DIRECT_THREADED_CODE

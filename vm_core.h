@@ -1410,7 +1410,7 @@ typedef rb_control_frame_t *
   (FUNC_INSNCALL(*rb_insn_func_t))(rb_execution_context_t *, rb_control_frame_t *);
 #else
 typedef VALUE
-  (FUNC_INSNCALL(*rb_insn_func_t))(rb_execution_context_t *, rb_control_frame_t *, const VALUE *);
+  (FUNC_INSNCALL(*rb_insn_func_t))(rb_execution_context_t *, rb_control_frame_t *, const VALUE *, VALUE *);
 #endif
 
 #define VM_TAGGED_PTR_SET(p, tag)  ((VALUE)(p) | (tag))
