@@ -114,7 +114,9 @@ CPP = $(CC) -E
 !if !defined(LRAMA)
 LRAMA = $(BASERUBY) $(top_srcdir)/tool/lrama/exe/lrama
 !endif
+!if !defined(AR)
 AR = lib -nologo
+!endif
 PURIFY =
 AUTOCONF = autoconf
 IFCHANGE = $(COMSPEC) /C $(srcdir:/=\)\win32\ifchange.bat
@@ -990,6 +992,7 @@ s,@LRAMA@,$(LRAMA),;t t
 s,@RANLIB@,,;t t
 s,@AR@,$(AR),;t t
 s,@ARFLAGS@,$(ARFLAGS),;t t
+s,@NM@,$(NM),;t t
 s,@LN_S@,$(LN_S),;t t
 s,@SET_MAKE@,MFLAGS = -$$(MAKEFLAGS),;t t
 s,@RM@,$$(COMSPEC) /C $$(top_srcdir:/=\)\win32\rm.bat,;t t

@@ -7,7 +7,7 @@ module RbConfig
 end
 
 class Exports
-  PrivateNames = /(?:Init_|InitVM_|ruby_static_id_|threadptr|_ec_|DllMain\b)/
+  PrivateNames = /(?:Init_|InitVM_|ruby_static_id_|threadptr|_ec_|DllMain\b|\.weak\.|\ACLSID_CUrlHistory|__Avx2WmemEnabledWealValue|__local_stdio_printf_options)/
 
   def self.create(*args, &block)
     platform = RUBY_PLATFORM
@@ -62,8 +62,9 @@ class Exports
 
   def exports(name = $name, library = $library, description = $description)
     exports = []
+    name ||= RbConfig::CONFIG["LIBRUBY_SO"]
     if name
-      exports << "Name " + name
+      exports << "NAME " + name
     elsif library
       exports << "Library " + library
     end
@@ -91,6 +92,33 @@ class Exports
 
   def symbols()
     @syms.sort.collect {|k, v| v ? v == true ? "#{k} DATA" : "#{k}=#{v}" : k}
+  end
+
+  module GnuToolchain
+    def nm
+      @nm ||=
+        begin
+          require 'shellwords'
+          RbConfig::CONFIG["NM"].shellsplit
+        end
+    end
+
+    def each_line(objs, &block)
+$stderr.puts [*nm, *%w[--extern-only --defined-only], *objs].inspect
+      IO.popen([*nm, *%w[--extern-only --defined-only], *objs]) do |f|
+        f.each(&block)
+      end
+    end
+
+    def each_export(objs)
+      symprefix = RbConfig::CONFIG["SYMBOL_PREFIX"]
+      symprefix.strip! if symprefix
+      re = /\s(?:(T)|[[:upper:]])\s#{symprefix}((?!#{PrivateNames}).*)$/
+      objdump(objs) do |l|
+        next if /@.*@/ =~ l
+        yield $2.strip, !$1 if re =~ l
+      end
+    end
   end
 end
 
@@ -134,36 +162,30 @@ class Exports::Mswin < Exports
     yield "strcasecmp", "msvcrt.stricmp"
     yield "strncasecmp", "msvcrt.strnicmp"
   end
+
+  if (RbConfig::CONFIG["NM"] || "") != ""
+    undef each_line, each_export
+    include GnuToolchain
+
+    def nm
+      super
+    end
+
+    def each_line(...)
+      super
+    end
+
+    def each_export(objs, &block)
+      super
+      yield "strcasecmp", "msvcrt.stricmp"
+      yield "strncasecmp", "msvcrt.strnicmp"
+      p "GNU TOOLCHAIN USED"
+    end
+  end
 end
 
 class Exports::Cygwin < Exports
-  def self.nm
-    @@nm ||=
-      begin
-        require 'shellwords'
-        RbConfig::CONFIG["NM"].shellsplit
-      end
-  end
-
-  def exports(*)
-    super()
-  end
-
-  def each_line(objs, &block)
-    IO.popen([*self.class.nm, *%w[--extern-only --defined-only], *objs]) do |f|
-      f.each(&block)
-    end
-  end
-
-  def each_export(objs)
-    symprefix = RbConfig::CONFIG["SYMBOL_PREFIX"]
-    symprefix.strip! if symprefix
-    re = /\s(?:(T)|[[:upper:]])\s#{symprefix}((?!#{PrivateNames}).*)$/
-    objdump(objs) do |l|
-      next if /@.*@/ =~ l
-      yield $2.strip, !$1 if re =~ l
-    end
-  end
+  include Exports::GnuToolchain
 end
 
 class Exports::Msys < Exports::Cygwin

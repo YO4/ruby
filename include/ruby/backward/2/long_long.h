@@ -37,7 +37,7 @@
 # /** @deprecated  Just use `long long` directly. */
 # define LONG_LONG long long.
 
-#elif RBIMPL_HAS_WARNING("-Wc++11-long-long")
+#elif RBIMPL_HAS_WARNING("-Wc++11-long-long") && !defined(_MSC_VER)
 # define HAVE_TRUE_LONG_LONG 1
 # define LONG_LONG                           \
     RBIMPL_WARNING_PUSH()                     \
@@ -45,7 +45,7 @@
     long long                                \
     RBIMPL_WARNING_POP()
 
-#elif RBIMPL_HAS_WARNING("-Wlong-long")
+#elif RBIMPL_HAS_WARNING("-Wlong-long") && !defined(_MSC_VER)
 # define HAVE_TRUE_LONG_LONG 1
 # define LONG_LONG                     \
     RBIMPL_WARNING_PUSH()               \

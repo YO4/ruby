@@ -197,12 +197,18 @@ ALWAYS_INLINE(static) TARGET_SSE2 int string_scan_simd_sse2(const char **ptr, co
 
 static inline SIMD_Implementation find_simd_implementation(void)
 {
+#ifdef _WIN32
+    // currently clang-cl does not link clang_rt.builtins-x86_64.lib and fails linking.
+    // Windows 8 requires SSE2 support. SSE2 is supported here.
+    return SIMD_SSE2;
+#else
     // TODO Revisit. I think the SSE version now only uses SSE2 instructions.
     if (__builtin_cpu_supports("sse2")) {
         return SIMD_SSE2;
     }
 
     return SIMD_NONE;
+#endif
 }
 
 #endif /* HAVE_X86INTRIN_H */

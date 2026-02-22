@@ -25,13 +25,20 @@
 #if ! defined(_MSC_VER)
 # define RBIMPL_COMPILER_IS_MSVC 0
 
-#elif RBIMPL_COMPILER_IS(Clang)
+#elif RBIMPL_COMPILER_IS(Clang) && 0
 # define RBIMPL_COMPILER_IS_MSVC 0
 
 #elif RBIMPL_COMPILER_IS(Intel)
 # define RBIMPL_COMPILER_IS_MSVC 0
 
 #elif _MSC_VER >= 1400
+# /* clang-cl is treated as cl.exe. However, __clang__ remains available. */
+# undef  RBIMPL_COMPILER_IS_Clang
+# define RBIMPL_COMPILER_IS_Clang 0
+# undef  RBIMPL_COMPILER_VERSION_MAJOR
+# undef  RBIMPL_COMPILER_VERSION_MINOR
+# undef  RBIMPL_COMPILER_VERSION_PATCH
+
 # define RBIMPL_COMPILER_IS_MSVC 1
 # /* _MSC_FULL_VER = XXYYZZZZZ */
 # define RBIMPL_COMPILER_VERSION_MAJOR (_MSC_FULL_VER / 10000000)
