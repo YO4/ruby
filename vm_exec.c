@@ -147,7 +147,7 @@ static VALUE
 vm_exec_core(rb_execution_context_t *ec)
 {
     register rb_control_frame_t *reg_cfp = ec->cfp;
-    return (VALUE)((rb_insn_func_t) (*reg_cfp->pc))(ec, reg_cfp, reg_cfp->pc);
+    return ((rb_insn_func_t) (*reg_cfp->pc))(ec, reg_cfp, reg_cfp->pc);
 }
 #else
 static VALUE

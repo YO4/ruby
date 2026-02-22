@@ -59,14 +59,14 @@ error !
 #define DISPATCH_ORIGINAL_INSN(x) return LABEL(x)(ec, reg_cfp);
 
 #elif OPT_TAILCALL_THREADED_CODE
-static rb_control_frame_t *
+static VALUE
 FUNC_FASTCALL(terminate_tailcall)(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *reg_pc)
 {
-    return reg_cfp;
+    return (VALUE)reg_cfp;
 }
 
 #define INSN_ENTRY(insn) \
-  static rb_control_frame_t * \
+  static VALUE \
     FUNC_FASTCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *reg_pc)
 
 #define END_INSN(insn) \

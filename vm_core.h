@@ -1397,7 +1397,7 @@ typedef VALUE CDHASH;
 typedef rb_control_frame_t *
   (FUNC_FASTCALL(*rb_insn_func_t))(rb_execution_context_t *, rb_control_frame_t *);
 #else
-typedef rb_control_frame_t *
+typedef VALUE
   (FUNC_FASTCALL(*rb_insn_func_t))(rb_execution_context_t *, rb_control_frame_t *, const VALUE *);
 #endif
 
