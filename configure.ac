@@ -3727,6 +3727,8 @@ AS_CASE("$enable_shared", [yes], [
 	])
 ], [
   LIBRUBYARG_SHARED=
+  ENCOBJS=''
+  EXTOBJS=''
 
   # enable PIE if possible
   AC_ARG_ENABLE(pie,

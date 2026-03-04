@@ -85,7 +85,8 @@ deps.map! {|d|
 # prefer extinit.o, which does actual Init_${ext} function calls for statically
 # linked extensions, and drop dmyext.o, which does nothing but just to make the
 # linker happy.
-if objs = macros["EXTOBJS"] and objs.any? {|e|e.start_with?("ext/extinit.")}
+if objs = macros["EXTOBJS"] and
+  (objs.any? {|e|e.start_with?("ext/extinit.")} or macros["ENABLE_SHARED"] != "yes")
   objs.delete_if {|e|e.start_with?("dmyext.")}
 end
 macros.default = [].freeze

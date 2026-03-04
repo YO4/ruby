@@ -23,13 +23,6 @@ else
   endif
 endif
 
-ifneq ($(ENABLE_SHARED),yes)
-  RUBY_EXP = $(RUBY_INSTALL_NAME).exp
-  EXTOBJS = $(RUBY_EXP)
-  LIBRUBYARG = $(LIBRUBY_A)
-  LIBRUBY_SO =
-endif
-
 ifeq ($(RUBY_INSTALL_NAME),ruby)
   RUBYW_INSTALL_NAME = $(RUBY_INSTALL_NAME)w
 else
@@ -38,12 +31,20 @@ endif
 
 WPROGRAM = $(RUBYW_INSTALL_NAME)$(EXEEXT)
 
+RUBYDEF = $(DLL_BASE_NAME).def
+
+ifneq ($(ENABLE_SHARED),yes)
+  LIBRUBYARG = -Wl,--whole-archive $(LIBRUBY_A) -Wl,--no-whole-archive $(MAINLIBS) $(RUBYDEF)
+  LIBRUBY_SO =
+$(PROGRAM): $(RUBYDEF)
+$(WPROGRAM): $(RUBYDEF)
+endif
+
 include $(srcdir)/template/GNUmakefile.in
 
 SOLIBS := $(DLL_BASE_NAME).res.$(OBJEXT) $(SOLIBS)
 override EXTOBJS += $(if $(filter-out $(RUBYW_INSTALL_NAME),$(@:$(EXEEXT)=)),$(RUBY_INSTALL_NAME),$(@:$(EXEEXT)=)).res.$(OBJEXT)
 RCFILES = $(RUBY_INSTALL_NAME).rc $(RUBYW_INSTALL_NAME).rc $(DLL_BASE_NAME).rc
-RUBYDEF = $(DLL_BASE_NAME).def
 override LIBRUBY_FOR_LEAKED_GLOBALS := # DLL shows symbols from import library
 
 ruby: $(PROGRAM)
@@ -71,10 +72,10 @@ $(WPROGRAM): $(RUBYW_INSTALL_NAME).res.$(OBJEXT)
 	  $(MAINOBJ) $(EXTOBJS) $(LIBRUBYARG) $(LIBS) -o $@
 $(STUBPROGRAM): $(RUBY_INSTALL_NAME).res.$(OBJEXT)
 
-$(RUBY_EXP): $(LIBRUBY_A)
+$(RUBY_EXP): $(LIBRUBY_A) $(RUBYDEF)
 	$(ECHO) creating $@
 	$(Q) $(DLLWRAP) \
-	  --output-exp=$(RUBY_EXP) \
+	  --output-exp=$(RUBY_EXP) -def $(RUBYDEF) \
 	  --export-all $(LIBRUBY_A) $(LIBS) -o $(PROGRAM)
 	$(Q) $(LDSHARED) $(DLDFLAGS) $(OBJS) dmyext.o $(SOLIBS) -o $(PROGRAM)
 	@rm -f $(PROGRAM)
