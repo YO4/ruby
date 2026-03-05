@@ -177,6 +177,6 @@ append_cflags(extcflags.split) if extcflags
 extldflags = ENV["RUBY_OPENSSL_EXTLDFLAGS"]
 append_ldflags(extldflags.split) if extldflags
 
-create_header
 create_makefile("openssl")
+create_header
 Logging::message "Done.\n"
