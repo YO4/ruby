@@ -229,6 +229,9 @@ void *rb_register_sigaltstack(void *);
 #if defined(__clang__) && __clang_major__ >= 19
 #define FUNC_INSNCALL(x) __attribute__((preserve_none)) x
 
+#elif defined(__GNUC__) && __GNUC__ >= 16
+#define FUNC_INSNCALL(x) __attribute__((preserve_none)) x
+
 #elif defined(_MSC_VER) && defined(_M_AMD64)
 #define FUNC_INSNCALL(x) __preserve_none x
 
