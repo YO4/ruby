@@ -19,6 +19,8 @@
 #if defined(__wasm__) && !defined(__EMSCRIPTEN__)
 # include "wasm/setjmp.h"
 # include "wasm/machine.h"
+#elif defined(_WIN32)
+# include "win32/setjmp.h"
 #else
 # include <setjmp.h>
 #endif
