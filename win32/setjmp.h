@@ -8,20 +8,28 @@
 
 #include <setjmp.h>
 
-#if defined(_MSC_VER) && defined(_WIN64)
+#if defined(_MSC_VER)
 /* msvc */
+#if defined(_M_AMD64)
+#define rb_w32_setjmp_func __intrinsic_setjmp
+#elif defined(_M_ARM64)
+#define rb_w32_setjmp_func __intrinsic_setjmpex
+#endif
 
+#if defined(rb_w32_setjmp_func)
 /* Include it beforehand to avoid the side effects of #define. */
 #include <intrin.h>
 
+
 /* Declare setjmp with hidden arguments */
-extern int __intrinsic_setjmp(jmp_buf, void *);
+extern int rb_w32_setjmp_func(jmp_buf, void *);
 
 /* Avoid using SEH by passing NULL as the second argument
  * instead of the compiler-provided argument.
  */
-#define rb_w32_setjmp(env) __intrinsic_setjmp((env), NULL)
+#define rb_w32_setjmp(env) rb_w32_setjmp_func((env), NULL)
 
+#endif /* rb_w32_setjmp_func */
 #endif /* _MSC_VER */
 
 #endif
