@@ -1685,7 +1685,7 @@ cont_restore_1(rb_context_t *cont)
     cont_restore_thread(cont);
 
     /* restore machine stack */
-#if (defined(_M_AMD64) && !defined(__MINGW64__)) || defined(_M_ARM64)
+#if (defined(_M_AMD64) && !defined(RUBY_SETJMP_NON_SEH)) || defined(_M_ARM64)
     {
         /* workaround for x64 and arm64 SEH on Windows */
         jmp_buf buf;

@@ -161,12 +161,18 @@ rb_ec_tag_jump(const rb_execution_context_t *ec, enum ruby_tag_type st)
     ruby_longjmp(RB_VM_TAG_JMPBUF_GET(ec->tag->buf), 1);
 }
 
+#if defined(RUBY_SETJMP_REQUIRE_CLEANUP_SEH)
+#define cleanup_setjmp(buf) *(__int64*)(&(buf)) = 0
+#else
+#define cleanup_setjmp(buf) 0
+#endif
+
 /*
   setjmp() in assignment expression rhs is undefined behavior
   [ISO/IEC 9899:1999] 7.13.1.1
 */
 #define EC_EXEC_TAG() \
-    (UNLIKELY(ruby_setjmp(RB_VM_TAG_JMPBUF_GET(_tag.buf))) ? rb_ec_tag_state(VAR_FROM_MEMORY(_ec)) : (EC_REPUSH_TAG(), 0))
+    (UNLIKELY(ruby_setjmp(RB_VM_TAG_JMPBUF_GET(_tag.buf))) ? rb_ec_tag_state(VAR_FROM_MEMORY(_ec)) : (cleanup_setjmp(_tag.buf), EC_REPUSH_TAG(), 0))
 
 #define EC_JUMP_TAG(ec, st) rb_ec_tag_jump(ec, st)
 
