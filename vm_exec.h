@@ -78,23 +78,23 @@ error !
 #endif
 
 #ifdef ATTR_PRESERVE_NONE
-#define INSN_FUNC_CONV ATTR_PRESERVE_NONE
+#define INSN_FUNC_CONV(x) ATTR_PRESERVE_NONE(x)
 #else
-#define INSN_FUNC_CONV
+#define INSN_FUNC_CONV(x) FUNC_FASTCALL(x)
 #endif
 
 #define INSN_FUNC_RET VALUE
 #define INSN_FUNC_PARAMS rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *reg_pc
 #define INSN_FUNC_ARGS ec, reg_cfp, reg_pc
 
-typedef INSN_FUNC_CONV INSN_FUNC_RET rb_insn_tailcall_func_t(INSN_FUNC_PARAMS);
+typedef INSN_FUNC_RET INSN_FUNC_CONV(rb_insn_tailcall_func_t)(INSN_FUNC_PARAMS);
 
 #define INSN_FUNC_ATTRIBUTES \
     __attribute__((no_stack_protector))
 
 #define INSN_ENTRY(insn) \
-  static INSN_FUNC_CONV INSN_FUNC_ATTRIBUTES INSN_FUNC_RET \
-    FUNC_FASTCALL(LABEL(insn))(INSN_FUNC_PARAMS) {
+  static INSN_FUNC_ATTRIBUTES INSN_FUNC_RET \
+    INSN_FUNC_CONV(LABEL(insn))(INSN_FUNC_PARAMS) {
 
 #define TC_DISPATCH(insn) \
   MUSTTAIL return (*(rb_insn_tailcall_func_t *)GET_CURRENT_INSN())(INSN_FUNC_ARGS);
