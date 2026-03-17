@@ -37,7 +37,7 @@
  * 3: call continuation (musttail attribute)
  */
 #ifndef OPT_THREADED_CODE
-#if RBIMPL_HAS_ATTRIBUTE(musttail)
+#if RBIMPL_HAS_ATTRIBUTE(musttail) && RBIMPL_HAS_ATTRIBUTE(preserve_none)
 #define OPT_THREADED_CODE 3
 #else
 #define OPT_THREADED_CODE 0
