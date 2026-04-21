@@ -23,7 +23,7 @@ jobs:
           token: ${{ (github.repository == 'ruby/ruby' && !startsWith(github.event_name, 'pull')) && secrets.MATZBOT_AUTO_UPDATE_TOKEN || secrets.GITHUB_TOKEN }}
           persist-credentials: false
 
-      - uses: ruby/setup-ruby@4eb9f110bac952a8b68ecf92e3b5c7a987594ba6 # v1.292.0
+      - uses: ruby/setup-ruby@94e4d89d3e6c1c7599e0210d114c5ffb23f1a866 # v1.304.0
         with:
           ruby-version: head
 
@@ -139,7 +139,7 @@ jobs:
           }}
 
       - name: Upload docs
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           path: html
           name: ${{ steps.docs.outputs.htmlout }}
