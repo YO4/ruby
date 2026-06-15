@@ -99,7 +99,9 @@ vm_lock_enter(rb_ractor_t *cr, rb_vm_t *vm, bool locked, bool no_barrier, unsign
 
             do {
                 VM_ASSERT(vm_need_barrier_waiting(vm));
+#ifdef RUBY_THREAD_PTHREAD_H
                 RUBY_DEBUG_LOG("barrier serial:%u", vm->ractor.sched.barrier_serial);
+#endif
                 rb_ractor_sched_barrier_join(vm, cr);
             } while (vm_need_barrier_waiting(vm));
         }
