@@ -21,6 +21,9 @@
 # include "internal/bits.h"
 #endif
 
+#ifdef BUILDING_MODULAR_GC
+# include <setjmp.h>
+#endif
 #include "ruby/ruby.h"
 #include "ruby/atomic.h"
 #include "ruby_atomic.h"
@@ -8537,17 +8540,16 @@ objspace_malloc_increase_body(rb_objspace_t *objspace, void *mem, size_t new_siz
          !malloc_increase_done; \
          malloc_increase_done = objspace_malloc_increase_body(__VA_ARGS__))
 
-#if defined(_WIN64)
-/* Wjndows x64 ABI requires jmp_buf to be 16-byte aligned */
-#define ADDITIONAL_ALIGNMENT 1
+#ifdef RUBY_JMP_BUF
+#define JMP_BUF_ALIGNMENT (RUBY_ALIGNOF(RUBY_JMP_BUF))
+#else
+#define JMP_BUF_ALIGNMENT (RUBY_ALIGNOF(size_t)) /* not assuming alignment requirements */
 #endif
 
-struct malloc_obj_info {
+typedef union malloc_obj_info {
     size_t size;  /* 4 words */
-#ifdef ADDITIONAL_ALIGNMENT
-    size_t dummy[ADDITIONAL_ALIGNMENT];
-#endif
-};
+    size_t padding[JMP_BUF_ALIGNMENT / RUBY_ALIGNOF(size_t)];
+} malloc_obj_info_t;
 
 static inline size_t
 objspace_malloc_prepare(rb_objspace_t *objspace, size_t size)
@@ -8555,7 +8557,7 @@ objspace_malloc_prepare(rb_objspace_t *objspace, size_t size)
     if (size == 0) size = 1;
 
 #if CALC_EXACT_MALLOC_SIZE
-    size += sizeof(struct malloc_obj_info);
+    size += sizeof(malloc_obj_info_t);
 #endif
 
     return size;
@@ -8579,7 +8581,7 @@ objspace_malloc_fixup(rb_objspace_t *objspace, void *mem, size_t size, bool gc_a
 
 #if CALC_EXACT_MALLOC_SIZE
     {
-        struct malloc_obj_info *info = mem;
+        malloc_obj_info_t *info = mem;
         info->size = size;
         mem = info + 1;
     }
@@ -8647,14 +8649,14 @@ rb_gc_impl_free(void *objspace_ptr, void *ptr, size_t old_size)
         return;
     }
 #if CALC_EXACT_MALLOC_SIZE
-    struct malloc_obj_info *info = (struct malloc_obj_info *)ptr - 1;
+    malloc_obj_info_t *info = (malloc_obj_info_t *)ptr - 1;
 #if VERIFY_FREE_SIZE
     if (!info->size) {
         rb_bug("buffer %p has no recorded size. Was it allocated with ruby_mimalloc? If so it should be freed with ruby_mimfree", ptr);
     }
 
-    if (old_size && (old_size + sizeof(struct malloc_obj_info)) != info->size) {
-        rb_bug("buffer %p freed with old_size=%zu, but was allocated with size=%zu", ptr, old_size, info->size - sizeof(struct malloc_obj_info));
+    if (old_size && (old_size + sizeof(malloc_obj_info_t)) != info->size) {
+        rb_bug("buffer %p freed with old_size=%zu, but was allocated with size=%zu", ptr, old_size, info->size - sizeof(malloc_obj_info_t));
     }
 #endif
     ptr = info;
@@ -8760,12 +8762,12 @@ rb_gc_impl_realloc(void *objspace_ptr, void *ptr, size_t new_size, size_t old_si
 
 #if CALC_EXACT_MALLOC_SIZE
     {
-        struct malloc_obj_info *info = (struct malloc_obj_info *)ptr - 1;
-        new_size += sizeof(struct malloc_obj_info);
+        malloc_obj_info_t *info = (malloc_obj_info_t *)ptr - 1;
+        new_size += sizeof(malloc_obj_info_t);
         ptr = info;
 #if VERIFY_FREE_SIZE
-        if (old_size && (old_size + sizeof(struct malloc_obj_info)) != info->size) {
-            rb_bug("buffer %p realloced with old_size=%zu, but was allocated with size=%zu", ptr, old_size, info->size - sizeof(struct malloc_obj_info));
+        if (old_size && (old_size + sizeof(malloc_obj_info_t)) != info->size) {
+            rb_bug("buffer %p realloced with old_size=%zu, but was allocated with size=%zu", ptr, old_size, info->size - sizeof(malloc_obj_info_t));
         }
 #endif
         old_size = info->size;
@@ -8779,7 +8781,7 @@ rb_gc_impl_realloc(void *objspace_ptr, void *ptr, size_t new_size, size_t old_si
 
 #if CALC_EXACT_MALLOC_SIZE
     {
-        struct malloc_obj_info *info = mem;
+        malloc_obj_info_t *info = mem;
         info->size = new_size;
         mem = info + 1;
     }

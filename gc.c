@@ -1215,8 +1215,8 @@ ruby_xmalloc_usable_size(void *ptr)
 {
 #ifdef HAVE_MALLOC_USABLE_SIZE
 #if CALC_EXACT_MALLOC_SIZE
-    struct malloc_obj_info *info = (struct malloc_obj_info *)ptr - 1;
-    return malloc_usable_size(info) - sizeof(struct malloc_obj_info);
+    malloc_obj_info_t *info = (malloc_obj_info_t *)ptr - 1;
+    return malloc_usable_size(info) - sizeof(malloc_obj_info_t);
 #else
     return malloc_usable_size(ptr);
 #endif
@@ -5602,7 +5602,7 @@ ruby_mimmalloc(size_t size)
 {
     void *mem;
 #if CALC_EXACT_MALLOC_SIZE
-    size += sizeof(struct malloc_obj_info);
+    size += sizeof(malloc_obj_info_t);
 #endif
     mem = malloc(size);
 #if CALC_EXACT_MALLOC_SIZE
@@ -5612,7 +5612,7 @@ ruby_mimmalloc(size_t size)
     else
     /* set 0 for consistency of allocated_size/allocations */
     {
-        struct malloc_obj_info *info = mem;
+        malloc_obj_info_t *info = mem;
         info->size = 0;
         mem = info + 1;
     }
@@ -5629,7 +5629,7 @@ ruby_mimcalloc(size_t num, size_t size)
     if (UNLIKELY(t.overflowed)) {
         return NULL;
     }
-    size = t.result + sizeof(struct malloc_obj_info);
+    size = t.result + sizeof(malloc_obj_info_t);
     mem = calloc1(size);
     if (!mem) {
         return NULL;
@@ -5637,7 +5637,7 @@ ruby_mimcalloc(size_t num, size_t size)
     else
     /* set 0 for consistency of allocated_size/allocations */
     {
-        struct malloc_obj_info *info = mem;
+        malloc_obj_info_t *info = mem;
         info->size = 0;
         mem = info + 1;
     }
@@ -5651,7 +5651,7 @@ void
 ruby_mimfree(void *ptr)
 {
 #if CALC_EXACT_MALLOC_SIZE
-    struct malloc_obj_info *info = (struct malloc_obj_info *)ptr - 1;
+    malloc_obj_info_t *info = (malloc_obj_info_t *)ptr - 1;
     ptr = info;
 #endif
     free(ptr);
