@@ -831,6 +831,37 @@ extern int rb_w32_mprotect(void *, size_t, int);
 #define munmap(a, l) rb_w32_munmap(a, l)
 #define mprotect(a, l, prot) rb_w32_mprotect(a, l, prot)
 
+/* termios emulation */
+
+#define tcgetattr(fd, t)		rb_w32_console_tcgetattr(fd, t)
+#define tcsetattr(fd, opt, t)		rb_w32_console_tcsetattr(fd, opt, t)
+#define cfmakeraw(t)			rb_w32_console_cfmakeraw(t)
+#define tcflush(fd, q)			rb_w32_console_tcflush(fd, q)
+#define cfgetispeed(t)			rb_w32_console_cfgetispeed(t)
+#define cfgetospeed(t)			rb_w32_console_cfgetospeed(t)
+#define cfsetispeed(t, s)		rb_w32_console_cfsetispeed(t, s)
+#define cfsetospeed(t, s)		rb_w32_console_cfsetospeed(t, s)
+#define tcdrain(fd)			rb_w32_console_tcdrain(fd)
+#define tcflow(fd, action)		rb_w32_console_tcflow(fd, action)
+#define tcsendbreak(fd, duration)	rb_w32_console_tcsendbreak(fd, duration)
+#define cfsetspeed(t, s)		rb_w32_console_cfsetspeed(t, s)
+
+#include "win32/termios.h"
+
+/* termios emulation (implemented in win32/console.c) */
+extern int rb_w32_console_tcgetattr(int fd, struct termios *t);
+extern int rb_w32_console_tcsetattr(int fd, int opt, const struct termios *t);
+extern void rb_w32_console_cfmakeraw(struct termios *t);
+extern int rb_w32_console_tcflush(int fd, int q);
+extern speed_t rb_w32_console_cfgetispeed(const struct termios *t);
+extern speed_t rb_w32_console_cfgetospeed(const struct termios *t);
+extern int rb_w32_console_cfsetispeed(struct termios *t, speed_t s);
+extern int rb_w32_console_cfsetospeed(struct termios *t, speed_t s);
+extern int rb_w32_console_tcdrain(int fd);
+extern int rb_w32_console_tcflow(int fd, int action);
+extern int rb_w32_console_tcsendbreak(int fd, int duration);
+extern int rb_w32_console_cfsetspeed(struct termios *t, speed_t s);
+
 #if defined(__cplusplus)
 #if 0
 { /* satisfy cc-mode */

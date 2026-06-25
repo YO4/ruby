@@ -60,6 +60,7 @@
 #include "ruby/vm.h"
 #include "win32/dir.h"
 #include "win32/file.h"
+#include "win32/console.h"
 #include "id.h"
 #include "internal.h"
 #include "internal/enc.h"
@@ -695,7 +696,10 @@ constat_delete(HANDLE h)
 static void
 exit_handler(void)
 {
+    rb_w32_console_cleanup();
+
     WSACleanup();
+
     DeleteCriticalSection(&select_mutex);
     DeleteCriticalSection(&socklist_mutex);
     DeleteCriticalSection(&conlist_mutex);
@@ -870,6 +874,13 @@ rb_w32_sysinit(int *argc, char ***argv)
     init_env();
 
     init_stdhandle();
+
+    // Initialize console reader
+    if (rb_w32_console_init() != 0) {
+        fprintf(stderr, "ruby: warning: console reader thread initialization"
+                " failed (errno=%d); console input will not work correctly\n",
+                errno);
+    }
 
     // Initialize Winsock
     StartSockets();
@@ -3053,28 +3064,7 @@ is_console(SOCKET sock) /* DONT call this for SOCKET! */
 static int
 is_readable_console(SOCKET sock) /* call this for console only */
 {
-    int ret = 0;
-    DWORD n = 0;
-    INPUT_RECORD ir;
-
-    RUBY_CRITICAL {
-        if (PeekConsoleInputW((HANDLE)sock, &ir, 1, &n) && n > 0) {
-            if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown &&
-                ir.Event.KeyEvent.uChar.UnicodeChar) {
-                ret = 1;
-            }
-            else if (ir.EventType == KEY_EVENT && !ir.Event.KeyEvent.bKeyDown &&
-                ir.Event.KeyEvent.wVirtualKeyCode == VK_MENU /* ALT key */ &&
-                ir.Event.KeyEvent.uChar.UnicodeChar) {
-                ret = 1;
-            }
-            else {
-                ReadConsoleInputW((HANDLE)sock, &ir, 1, &n);
-            }
-        }
-    }
-
-    return ret;
+    return rb_w32_console_readable();
 }
 
 /* License: Ruby's */
@@ -3168,6 +3158,7 @@ rb_w32_select_with_thread(int nfds, fd_set *rd, fd_set *wr, fd_set *ex,
     rb_fdset_t except;
     int nonsock = 0;
     struct timeval limit = {0, 0};
+    BOOL console_reader_started = FALSE;
 
     if (nfds < 0 || (timeout && (timeout->tv_sec < 0 || timeout->tv_usec < 0))) {
         errno = EINVAL;
@@ -3216,6 +3207,13 @@ rb_w32_select_with_thread(int nfds, fd_set *rd, fd_set *wr, fd_set *ex,
 
     rb_fd_init(&cons_rd);
     extract_fd(&cons_rd, else_rd.fdset, is_console); // ditto
+
+    // If console reading is requested, register ourselves as a waiter so
+    // the dedicated console reader thread starts reading from CONIN$.
+    if (cons_rd.fdset->fd_count > 0) {
+        rb_w32_console_select_start();
+        console_reader_started = TRUE;
+    }
 
     rb_fd_init(&except);
     extract_fd(&except, ex, is_not_socket); // drop only
@@ -3281,6 +3279,12 @@ rb_w32_select_with_thread(int nfds, fd_set *rd, fd_set *wr, fd_set *ex,
                 Sleep(dowait->tv_sec * 1000 + (dowait->tv_usec + 999) / 1000);
             }
         }
+    }
+
+    // select() is done. If we had started console reading, stop it so
+    // the reader thread can suspend if no other threads are waiting.
+    if (console_reader_started) {
+        rb_w32_console_select_stop();
     }
 
     rb_fd_term(&except);
@@ -7204,12 +7208,24 @@ rb_w32_read_internal(int fd, void *buf, size_t size, rb_off_t *offset)
     if (is_socket(sock))
         return rb_w32_recv(fd, buf, size, 0);
 
+    BOOL is_console = FALSE;
+    HANDLE read_handle = (HANDLE)_osfhnd(fd);
+
+    if (rb_w32_isatty(fd)) {
+        read_handle = rb_w32_console_get_pipe_read();
+        if (read_handle == INVALID_HANDLE_VALUE)
+            return -1;
+        is_console = TRUE;
+        rb_w32_console_read_start();
+    }
+
     // validate fd by using _get_osfhandle() because we cannot access _nhandle
     if (_get_osfhandle(fd) == -1) {
+        if (is_console) rb_w32_console_read_stop();
         return -1;
     }
 
-    if (!offset && _osfile(fd) & FTEXT) {
+    if (!offset && _osfile(fd) & FTEXT && !is_console) {
         return _read(fd, buf, size);
     }
 
@@ -7218,6 +7234,7 @@ rb_w32_read_internal(int fd, void *buf, size_t size, rb_off_t *offset)
     if (!size || _osfile(fd) & FEOFLAG) {
         _set_osflags(fd, _osfile(fd) & ~FEOFLAG);
         rb_acrt_lowio_unlock_fh(fd);
+        if (is_console) rb_w32_console_read_stop();
         return 0;
     }
 
@@ -7228,20 +7245,22 @@ rb_w32_read_internal(int fd, void *buf, size_t size, rb_off_t *offset)
 
     if (setup_overlapped(&ol, fd, FALSE, offset)) {
         rb_acrt_lowio_unlock_fh(fd);
+        if (is_console) rb_w32_console_read_stop();
         return -1;
     }
 
-    if (!ReadFile((HANDLE)_osfhnd(fd), buf, len, &read, &ol)) {
+    if (!ReadFile(read_handle, buf, len, &read, &ol)) {
         err = GetLastError();
-        if (err == ERROR_NO_DATA && (_osfile(fd) & FPIPE)) {
+        if (err == ERROR_NO_DATA && (is_console || (_osfile(fd) & FPIPE))) {
             DWORD state;
-            if (GetNamedPipeHandleState((HANDLE)_osfhnd(fd), &state, NULL, NULL, NULL, NULL, 0) && (state & PIPE_NOWAIT)) {
+            if (GetNamedPipeHandleState(read_handle, &state, NULL, NULL, NULL, NULL, 0) && (state & PIPE_NOWAIT)) {
                 errno = EWOULDBLOCK;
             }
             else {
                 errno = map_errno(err);
             }
             rb_acrt_lowio_unlock_fh(fd);
+            if (is_console) rb_w32_console_read_stop();
             return -1;
         }
         else if (err != ERROR_IO_PENDING) {
@@ -7250,12 +7269,14 @@ rb_w32_read_internal(int fd, void *buf, size_t size, rb_off_t *offset)
                 errno = EBADF;
             else if (err == ERROR_BROKEN_PIPE || err == ERROR_HANDLE_EOF) {
                 rb_acrt_lowio_unlock_fh(fd);
+                if (is_console) rb_w32_console_read_stop();
                 return 0;
             }
             else
                 errno = map_errno(err);
 
             rb_acrt_lowio_unlock_fh(fd);
+            if (is_console) rb_w32_console_read_stop();
             return -1;
         }
 
@@ -7266,12 +7287,13 @@ rb_w32_read_internal(int fd, void *buf, size_t size, rb_off_t *offset)
             else
                 errno = map_errno(GetLastError());
             CloseHandle(ol.hEvent);
-            CancelIo((HANDLE)_osfhnd(fd));
+            CancelIo(read_handle);
             rb_acrt_lowio_unlock_fh(fd);
+            if (is_console) rb_w32_console_read_stop();
             return -1;
         }
 
-        if (!GetOverlappedResult((HANDLE)_osfhnd(fd), &ol, &read, TRUE) &&
+        if (!GetOverlappedResult(read_handle, &ol, &read, TRUE) &&
             (err = GetLastError()) != ERROR_HANDLE_EOF) {
             int ret = 0;
             if (err != ERROR_BROKEN_PIPE) {
@@ -7279,8 +7301,9 @@ rb_w32_read_internal(int fd, void *buf, size_t size, rb_off_t *offset)
                 ret = -1;
             }
             CloseHandle(ol.hEvent);
-            CancelIo((HANDLE)_osfhnd(fd));
+            CancelIo(read_handle);
             rb_acrt_lowio_unlock_fh(fd);
+            if (is_console) rb_w32_console_read_stop();
             return ret;
         }
     }
@@ -7303,6 +7326,7 @@ rb_w32_read_internal(int fd, void *buf, size_t size, rb_off_t *offset)
 
     rb_acrt_lowio_unlock_fh(fd);
 
+    if (is_console) rb_w32_console_read_stop();
     return ret;
 }
 
