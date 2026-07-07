@@ -678,6 +678,19 @@ free_conlist(st_data_t key, st_data_t val, st_data_t arg)
     return ST_DELETE;
 }
 
+static CRITICAL_SECTION conin_mutex;
+enum { CONIN_INCOMPLETE = 0, CONIN_COMPLETE = 1, CONIN_EBADF = -1 };
+struct conin_edit {
+    WCHAR *wbuf;
+    size_t wcap;
+    size_t wlen;   /* total chars in wbuf (raw + committed) */
+    size_t wedit;  /* committed/processed chars (cursor position) */
+    char *mbuf;
+    size_t mblen, mbpos;
+    int state;
+};
+static struct conin_edit conin_edit;
+
 /* License: Ruby's */
 static void
 constat_delete(HANDLE h)
@@ -699,6 +712,7 @@ exit_handler(void)
     DeleteCriticalSection(&select_mutex);
     DeleteCriticalSection(&socklist_mutex);
     DeleteCriticalSection(&conlist_mutex);
+    DeleteCriticalSection(&conin_mutex);
     thread_exclusive(uenvarea) {
         if (uenvarea) {
             free(uenvarea);
@@ -768,6 +782,7 @@ StartSockets(void)
     InitializeCriticalSection(&select_mutex);
     InitializeCriticalSection(&socklist_mutex);
     InitializeCriticalSection(&conlist_mutex);
+    InitializeCriticalSection(&conin_mutex);
 
     atexit(exit_handler);
 }
@@ -3049,31 +3064,23 @@ is_console(SOCKET sock) /* DONT call this for SOCKET! */
     return ret;
 }
 
+static HANDLE conin_ensure(void);
+static int conin_read_keys(HANDLE in, HANDLE out);
+
 /* License: Ruby's */
 static int
 is_readable_console(SOCKET sock) /* call this for console only */
 {
+    HANDLE in;
     int ret = 0;
-    DWORD n = 0;
-    INPUT_RECORD ir;
 
-    RUBY_CRITICAL {
-        if (PeekConsoleInputW((HANDLE)sock, &ir, 1, &n) && n > 0) {
-            if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown &&
-                ir.Event.KeyEvent.uChar.UnicodeChar) {
-                ret = 1;
-            }
-            else if (ir.EventType == KEY_EVENT && !ir.Event.KeyEvent.bKeyDown &&
-                ir.Event.KeyEvent.wVirtualKeyCode == VK_MENU /* ALT key */ &&
-                ir.Event.KeyEvent.uChar.UnicodeChar) {
-                ret = 1;
-            }
-            else {
-                ReadConsoleInputW((HANDLE)sock, &ir, 1, &n);
-            }
-        }
+    (void)sock; /* fd classification is done by is_console() at the caller */
+    EnterCriticalSection(&conin_mutex);
+    in = conin_ensure();
+    if (in != INVALID_HANDLE_VALUE) {
+        ret = (conin_read_keys(in, conout_ensure()) == CONIN_COMPLETE) ? 1 : 0;
     }
-
+    LeaveCriticalSection(&conin_mutex);
     return ret;
 }
 
@@ -7082,6 +7089,220 @@ constat_parse(HANDLE h, struct constat *s, const WCHAR **ptrp, long *lenp)
     return len;
 }
 
+static HANDLE conin = INVALID_HANDLE_VALUE;
+static HANDLE conout = INVALID_HANDLE_VALUE;
+static const DWORD CONIN_WAIT = 10;
+
+/* License: Ruby's */
+static void
+conin_mark_invalid(void)
+{
+    if (conin != INVALID_HANDLE_VALUE) {
+        CloseHandle(conin);
+        conin = INVALID_HANDLE_VALUE;
+    }
+    if (conout != INVALID_HANDLE_VALUE) {
+        CloseHandle(conout);
+        conout = INVALID_HANDLE_VALUE;
+    }
+}
+
+static HANDLE
+conin_ensure(void)
+{
+    if (conin == INVALID_HANDLE_VALUE)
+        conin = open_special(L"CONIN$", GENERIC_READ|GENERIC_WRITE, 0);
+    return conin;
+}
+
+static HANDLE
+conout_ensure(void)
+{
+    if (conout == INVALID_HANDLE_VALUE)
+        conout = open_special(L"CONOUT$", GENERIC_READ|GENERIC_WRITE, 0);
+    return conout;
+}
+
+static void
+conin_reset(void)
+{
+    conin_edit.wlen = 0;
+    conin_edit.wedit = 0;
+    conin_edit.mblen = 0;
+    conin_edit.mbpos = 0;
+    conin_edit.state = CONIN_INCOMPLETE;
+}
+
+static void
+conin_echo(HANDLE out, const WCHAR *wstr, long len)
+{
+    struct constat *s;
+    if (out == INVALID_HANDLE_VALUE) return;
+    s = constat_handle(out);
+    if (!s) return;
+    while (len > 0) {
+        const WCHAR *next = wstr;
+        long curlen = constat_parse(out, s, &next, &len);
+        if (curlen > 0) {
+            DWORD written;
+            if (!WriteConsoleW(out, wstr, (DWORD)curlen, &written, NULL))
+                break;
+        }
+        wstr = next;
+    }
+}
+
+/* process one key event; return 1 if line editing is complete (Enter/Ctrl-D) */
+static int
+conin_line_edit(HANDLE out, DWORD mode, const KEY_EVENT_RECORD *ke)
+{
+    struct conin_edit *e = &conin_edit;
+    int echo = (mode & ENABLE_ECHO_INPUT) != 0;
+
+    if (ke->wVirtualKeyCode == VK_RETURN) {
+        e->wbuf[e->wedit] = L'\n';
+        e->wedit++;
+        e->wlen = e->wedit;
+        if (echo) conin_echo(out, L"\r\n", 2);
+        return 1;
+    }
+    if (ke->wVirtualKeyCode == VK_BACK) {
+        if (e->wedit > 0) {
+            e->wedit--;
+            if (echo) conin_echo(out, L"\b \b", 3);
+        }
+        e->wlen = e->wedit; /* always discard the backspace char written by conin_read_keys */
+        return 0;
+    }
+    if ((ke->dwControlKeyState & (LEFT_CTRL_PRESSED|RIGHT_CTRL_PRESSED)) &&
+        ke->uChar.UnicodeChar == L'\x04') {
+        /* Ctrl-D: discard the char already written by conin_read_keys, complete */
+        if (e->wedit > 0) e->wedit--;
+        e->wlen = e->wedit;
+        return 1;
+    }
+    /* printable (RAW control chars are also committed as-is in line mode) */
+    if (echo) conin_echo(out, &e->wbuf[e->wedit], 1);
+    e->wedit++;
+    e->wlen = e->wedit;
+    return 0;
+}
+
+/* drain available raw key events into the edit buffer (non-blocking) */
+static int
+conin_read_keys(HANDLE in, HANDLE out)
+{
+    DWORD mode;
+    struct conin_edit *e = &conin_edit;
+    DWORD avail = 0;
+
+    if (e->state == CONIN_COMPLETE) return e->state; /* already completed; wait for consume */
+    if (!GetConsoleMode(in, &mode)) { conin_mark_invalid(); return CONIN_EBADF; }
+    if (!GetNumberOfConsoleInputEvents(in, &avail)) { conin_mark_invalid(); return CONIN_EBADF; }
+
+    while (avail-- > 0) {
+        INPUT_RECORD ir;
+        DWORD n;
+        KEY_EVENT_RECORD *ke;
+        WCHAR c;
+
+        if (!ReadConsoleInputW(in, &ir, 1, &n) || n == 0) {
+            conin_mark_invalid();
+            return CONIN_EBADF;
+        }
+        if (ir.EventType != KEY_EVENT) continue;
+        ke = &ir.Event.KeyEvent;
+        if (!ke->bKeyDown) continue;
+        c = ke->uChar.UnicodeChar;
+        if (c == 0) continue; /* non-character key (e.g. arrow keys) */
+
+        if (e->wedit + 1 > e->wcap) {
+            size_t ncap = e->wcap ? e->wcap * 2 : 4096;
+            WCHAR *nb = (WCHAR *)realloc(e->wbuf, ncap * sizeof(WCHAR));
+            if (!nb) { conin_mark_invalid(); return CONIN_EBADF; }
+            e->wbuf = nb;
+            e->wcap = ncap;
+        }
+        e->wbuf[e->wedit] = c;
+        e->wlen = e->wedit + 1;
+
+        if (mode & ENABLE_LINE_INPUT) {
+            if (conin_line_edit(out, mode, ke)) {
+                e->state = CONIN_COMPLETE;
+                break;
+            }
+        }
+        else {
+            e->wedit = e->wlen; /* RAW: commit as-is, no echo */
+        }
+    }
+
+    if (!(mode & ENABLE_LINE_INPUT) && e->wlen > 0)
+        e->state = CONIN_COMPLETE;
+
+    if (e->state == CONIN_COMPLETE) {
+        long mblen = 0;
+        if (e->mbuf) free(e->mbuf);
+        e->mbuf = NULL;
+        if (e->wedit > 0) {
+            e->mbuf = rb_w32_wstr_to_mbstr(CP_UTF8, e->wbuf, (int)e->wedit, &mblen);
+        }
+        e->mblen = (size_t)mblen;
+        e->mbpos = 0;
+    }
+    return e->state;
+}
+
+static ssize_t
+rb_w32_read_console(int fd, void *buf, size_t size)
+{
+    HANDLE in;
+    struct conin_edit *e = &conin_edit;
+
+    (void)fd;
+    EnterCriticalSection(&conin_mutex);
+    in = conin_ensure();
+    if (in == INVALID_HANDLE_VALUE) {
+        LeaveCriticalSection(&conin_mutex);
+        errno = EBADF;
+        return -1;
+    }
+
+    for (;;) {
+        if (e->state == CONIN_COMPLETE) {
+            if (e->mblen == 0) {
+                conin_reset();
+                LeaveCriticalSection(&conin_mutex);
+                return 0;
+            }
+            else {
+                size_t avail = e->mblen - e->mbpos;
+                size_t n = avail < size ? avail : size;
+                memcpy(buf, e->mbuf + e->mbpos, n);
+                e->mbpos += n;
+                if (e->mbpos >= e->mblen) conin_reset();
+                LeaveCriticalSection(&conin_mutex);
+                return (ssize_t)n;
+            }
+        }
+        if (conin_read_keys(in, conout_ensure()) == CONIN_EBADF) {
+            LeaveCriticalSection(&conin_mutex);
+            errno = EBADF;
+            return -1;
+        }
+        if (e->state == CONIN_COMPLETE) continue; /* no need to wait */
+        LeaveCriticalSection(&conin_mutex);
+        {
+            DWORD wait = rb_w32_wait_events_blocking(&in, 1, CONIN_WAIT);
+            if (wait == (DWORD)(WAIT_OBJECT_0 + 1)) {
+                errno = EINTR;
+                return -1;
+            }
+            /* WAIT_TIMEOUT or WAIT_OBJECT_0: loop and read more */
+        }
+        EnterCriticalSection(&conin_mutex);
+    }
+}
 
 /* License: Ruby's */
 int
@@ -7207,6 +7428,14 @@ rb_w32_read_internal(int fd, void *buf, size_t size, rb_off_t *offset)
     // validate fd by using _get_osfhandle() because we cannot access _nhandle
     if (_get_osfhandle(fd) == -1) {
         return -1;
+    }
+
+    if (is_console(sock)) {
+        ssize_t r;
+        rb_acrt_lowio_lock_fh(fd);
+        r = rb_w32_read_console(fd, buf, size);
+        rb_acrt_lowio_unlock_fh(fd);
+        return r;
     }
 
     if (!offset && _osfile(fd) & FTEXT) {
