@@ -684,12 +684,12 @@ struct conin_edit {
     WCHAR *wbuf;
     size_t wcap;
     size_t wlen;   /* total chars in wbuf (raw + committed) */
-    size_t wedit;  /* committed/processed chars (cursor position) */
+    size_t wecho;  /* chars to be displayed */
     char *mbuf;
     size_t mblen, mbpos;
     int state;
 };
-static struct conin_edit conin_edit;
+static struct conin_edit conin_edit = {0};
 
 /* License: Ruby's */
 static void
@@ -3065,6 +3065,7 @@ is_console(SOCKET sock) /* DONT call this for SOCKET! */
 }
 
 static HANDLE conin_ensure(void);
+static HANDLE conout_ensure(void);
 static int conin_read_keys(HANDLE in, HANDLE out);
 
 /* License: Ruby's */
@@ -7092,6 +7093,7 @@ constat_parse(HANDLE h, struct constat *s, const WCHAR **ptrp, long *lenp)
 static HANDLE conin = INVALID_HANDLE_VALUE;
 static HANDLE conout = INVALID_HANDLE_VALUE;
 static const DWORD CONIN_WAIT = 10;
+DWORD rb_w32_write_console_wstr(HANDLE handle, const WCHAR *ptr, long len, DWORD mode);
 
 /* License: Ruby's */
 static void
@@ -7111,7 +7113,7 @@ static HANDLE
 conin_ensure(void)
 {
     if (conin == INVALID_HANDLE_VALUE)
-        conin = open_special(L"CONIN$", GENERIC_READ|GENERIC_WRITE, 0);
+        conin = open_special(L"CONIN$", GENERIC_READ | GENERIC_WRITE, 0);
     return conin;
 }
 
@@ -7119,7 +7121,7 @@ static HANDLE
 conout_ensure(void)
 {
     if (conout == INVALID_HANDLE_VALUE)
-        conout = open_special(L"CONOUT$", GENERIC_READ|GENERIC_WRITE, 0);
+        conout = open_special(L"CONOUT$", GENERIC_READ | GENERIC_WRITE, 0);
     return conout;
 }
 
@@ -7127,64 +7129,37 @@ static void
 conin_reset(void)
 {
     conin_edit.wlen = 0;
-    conin_edit.wedit = 0;
+    conin_edit.wecho = 0;
     conin_edit.mblen = 0;
     conin_edit.mbpos = 0;
     conin_edit.state = CONIN_INCOMPLETE;
 }
 
-static void
-conin_echo(HANDLE out, const WCHAR *wstr, long len)
-{
-    struct constat *s;
-    if (out == INVALID_HANDLE_VALUE) return;
-    s = constat_handle(out);
-    if (!s) return;
-    while (len > 0) {
-        const WCHAR *next = wstr;
-        long curlen = constat_parse(out, s, &next, &len);
-        if (curlen > 0) {
-            DWORD written;
-            if (!WriteConsoleW(out, wstr, (DWORD)curlen, &written, NULL))
-                break;
-        }
-        wstr = next;
-    }
-}
-
-/* process one key event; return 1 if line editing is complete (Enter/Ctrl-D) */
+/* process one functional key; return 1 if line editing is complete (Enter/Ctrl-D) */
 static int
-conin_line_edit(HANDLE out, DWORD mode, const KEY_EVENT_RECORD *ke)
+conin_line_edit(WCHAR c, HANDLE out, DWORD mode)
 {
     struct conin_edit *e = &conin_edit;
-    int echo = (mode & ENABLE_ECHO_INPUT) != 0;
 
-    if (ke->wVirtualKeyCode == VK_RETURN) {
-        e->wbuf[e->wedit] = L'\n';
-        e->wedit++;
-        e->wlen = e->wedit;
-        if (echo) conin_echo(out, L"\r\n", 2);
+    if (c == '\r') {
+        e->wbuf[e->wlen++] = L'\n';
+        if (out) {
+            rb_w32_write_console_wstr(out, e->wbuf + e->wecho, e->wlen - e->wecho, mode);
+            e->wecho = e->wlen;
+        }
         return 1;
     }
-    if (ke->wVirtualKeyCode == VK_BACK) {
-        if (e->wedit > 0) {
-            e->wedit--;
-            if (echo) conin_echo(out, L"\b \b", 3);
+    if (c == '\b') {
+        if (e->wlen > 0) {
+            e->wlen--;
+            if (e->wecho > e->wlen) e->wecho = e->wlen;
+            if (out) rb_w32_write_console_wstr(out, L"\b \b", 3, mode);
         }
-        e->wlen = e->wedit; /* always discard the backspace char written by conin_read_keys */
         return 0;
     }
-    if ((ke->dwControlKeyState & (LEFT_CTRL_PRESSED|RIGHT_CTRL_PRESSED)) &&
-        ke->uChar.UnicodeChar == L'\x04') {
-        /* Ctrl-D: discard the char already written by conin_read_keys, complete */
-        if (e->wedit > 0) e->wedit--;
-        e->wlen = e->wedit;
+    if (c == 'D' - '@') {
         return 1;
     }
-    /* printable (RAW control chars are also committed as-is in line mode) */
-    if (echo) conin_echo(out, &e->wbuf[e->wedit], 1);
-    e->wedit++;
-    e->wlen = e->wedit;
     return 0;
 }
 
@@ -7193,12 +7168,23 @@ static int
 conin_read_keys(HANDLE in, HANDLE out)
 {
     DWORD mode;
+    DWORD output_mode = 0;
+    HANDLE echo_out = NULL;
     struct conin_edit *e = &conin_edit;
     DWORD avail = 0;
+    int echo = 0;
 
     if (e->state == CONIN_COMPLETE) return e->state; /* already completed; wait for consume */
-    if (!GetConsoleMode(in, &mode)) { conin_mark_invalid(); return CONIN_EBADF; }
-    if (!GetNumberOfConsoleInputEvents(in, &avail)) { conin_mark_invalid(); return CONIN_EBADF; }
+    if (!GetConsoleMode(in, &mode)) {
+        conin_mark_invalid(); return CONIN_EBADF;
+    }
+    if ((mode & ENABLE_ECHO_INPUT) && (mode & ENABLE_LINE_INPUT)
+        && GetConsoleMode(out, &output_mode)) {
+        echo_out = out;
+    }
+    if (!GetNumberOfConsoleInputEvents(in, &avail)) {
+        conin_mark_invalid(); return CONIN_EBADF;
+    }
 
     while (avail-- > 0) {
         INPUT_RECORD ir;
@@ -7212,40 +7198,50 @@ conin_read_keys(HANDLE in, HANDLE out)
         }
         if (ir.EventType != KEY_EVENT) continue;
         ke = &ir.Event.KeyEvent;
-        if (!ke->bKeyDown) continue;
+        if (!ke->bKeyDown) {
+            if (!(ke->wVirtualKeyCode == VK_MENU && ke->uChar.UnicodeChar)) {
+               continue;
+            }
+        }
         c = ke->uChar.UnicodeChar;
         if (c == 0) continue; /* non-character key (e.g. arrow keys) */
 
-        if (e->wedit + 1 > e->wcap) {
+        if (e->wlen + 1 > e->wcap && e->wcap < 32768) {
             size_t ncap = e->wcap ? e->wcap * 2 : 4096;
             WCHAR *nb = (WCHAR *)realloc(e->wbuf, ncap * sizeof(WCHAR));
             if (!nb) { conin_mark_invalid(); return CONIN_EBADF; }
             e->wbuf = nb;
             e->wcap = ncap;
         }
-        e->wbuf[e->wedit] = c;
-        e->wlen = e->wedit + 1;
 
         if (mode & ENABLE_LINE_INPUT) {
-            if (conin_line_edit(out, mode, ke)) {
-                e->state = CONIN_COMPLETE;
-                break;
+            if (c < ' ') {
+                if (conin_line_edit(c, echo_out, output_mode)) {
+                    e->state = CONIN_COMPLETE;
+                    break;
+                }
+            }
+            else if (e->wlen < e->wcap - 1) {
+                e->wbuf[e->wlen++] = c;
             }
         }
         else {
-            e->wedit = e->wlen; /* RAW: commit as-is, no echo */
+            e->wbuf[e->wlen++] = c;
+            e->state = CONIN_COMPLETE;
+            if (e->wlen == e->wcap) break;
         }
     }
 
-    if (!(mode & ENABLE_LINE_INPUT) && e->wlen > 0)
-        e->state = CONIN_COMPLETE;
-
+    if (e->wecho != e->wlen && echo_out) {
+        rb_w32_write_console_wstr(echo_out, e->wbuf + e->wecho, e->wlen - e->wecho, output_mode);
+        e->wecho = e->wlen;
+    }
     if (e->state == CONIN_COMPLETE) {
         long mblen = 0;
         if (e->mbuf) free(e->mbuf);
         e->mbuf = NULL;
-        if (e->wedit > 0) {
-            e->mbuf = rb_w32_wstr_to_mbstr(CP_UTF8, e->wbuf, (int)e->wedit, &mblen);
+        if (e->wlen > 0) {
+            e->mbuf = rb_w32_wstr_to_mbstr(CP_UTF8, e->wbuf, (int)e->wlen, &mblen);
         }
         e->mblen = (size_t)mblen;
         e->mbpos = 0;
@@ -7298,7 +7294,6 @@ rb_w32_read_console(int fd, void *buf, size_t size)
                 errno = EINTR;
                 return -1;
             }
-            /* WAIT_TIMEOUT or WAIT_OBJECT_0: loop and read more */
         }
         EnterCriticalSection(&conin_mutex);
     }
@@ -7676,16 +7671,13 @@ rb_w32_write_console(uintptr_t strarg, int fd)
     VALUE str = strarg;
     int encindex;
     WCHAR *wbuffer = 0;
-    const WCHAR *ptr, *next;
-    struct constat *s;
+    const WCHAR *ptr;
     long len;
 
     handle = (HANDLE)_osfhnd(fd);
     if (!GetConsoleMode(handle, &dwMode))
         return -1L;
 
-    s = constat_handle(handle);
-    if (!s) return -1L;
     encindex = ENCODING_GET(str);
     switch (encindex) {
       default:
@@ -7706,12 +7698,27 @@ rb_w32_write_console(uintptr_t strarg, int fd)
         len = RSTRING_LEN(str) / sizeof(WCHAR);
         break;
     }
-    reslen = 0;
-    if (dwMode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
+    reslen = rb_w32_write_console_wstr(handle, ptr, len, dwMode);
+    RB_GC_GUARD(str);
+    free(wbuffer);
+    return (long)reslen;
+}
+
+/* License: Ruby's */
+DWORD
+rb_w32_write_console_wstr(HANDLE handle, const WCHAR *ptr, long len, DWORD mode)
+{
+    DWORD reslen = 0;
+
+    if (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
         if (!WriteConsoleW(handle, ptr, len, &reslen, NULL))
             reslen = (DWORD)-1L;
     }
     else {
+        const WCHAR *next;
+        struct constat *s = constat_handle(handle);
+
+        if (!s) return -1L;
         while (len > 0) {
             long curlen = constat_parse(handle, s, (next = ptr, &next), &len);
             reslen += next - ptr;
@@ -7725,9 +7732,7 @@ rb_w32_write_console(uintptr_t strarg, int fd)
             ptr = next;
         }
     }
-    RB_GC_GUARD(str);
-    free(wbuffer);
-    return (long)reslen;
+    return reslen;
 }
 
 /* License: Ruby's */
