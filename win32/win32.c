@@ -2652,16 +2652,6 @@ _pioinfo(int fd)
 #define FDEV			0x40	/* file handle refers to device */
 #define FTEXT			0x80	/* file handle is in text mode */
 
-static int is_socket(SOCKET);
-static int is_console(SOCKET);
-
-/* License: Ruby's */
-int
-rb_w32_io_cancelable_p(int fd)
-{
-    return is_socket(TO_SOCKET(fd)) || !is_console(TO_SOCKET(fd));
-}
-
 /* License: Ruby's */
 static int
 rb_w32_open_osfhandle(intptr_t osfhandle, int flags)
