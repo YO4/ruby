@@ -688,7 +688,7 @@ struct conin_edit {
     char *mbuf;
     size_t mblen, mbpos;
     int state;
-    int interrupted;
+    volatile int interrupted;
 };
 static struct conin_edit conin_edit = {0};
 
@@ -7142,7 +7142,33 @@ conin_reset(void)
 void
 rb_w32_conin_set_interrupt(int sig)
 {
-    conin_edit.interrupted = 1;
+    HANDLE in = conin_ensure();
+    DWORD mode = 0;
+    static volatile int ongoing = 0;
+
+    if (sig == SIGINT) signal(SIGINT, rb_w32_conin_set_interrupt);
+    if (!ongoing) {
+        ongoing = 1;
+        GetConsoleMode(in, &mode);
+        if (mode & ENABLE_LINE_INPUT) {
+            if (TryEnterCriticalSection(&conin_mutex)) {
+                FlushConsoleInputBuffer(conin_ensure());
+                conin_reset();
+                LeaveCriticalSection(&conin_mutex);
+            }
+            else {
+                conin_edit.interrupted = 1;
+                FlushConsoleInputBuffer(conin_ensure());
+            }
+            if (mode & ENABLE_ECHO_INPUT) {
+                HANDLE out = conout_ensure();
+                DWORD output_mode = 0;
+                GetConsoleMode(out, &output_mode);
+                rb_w32_write_console_wstr(out, L"^C", 2, output_mode);
+            }
+        }
+        ongoing = 0;
+    }
 }
 
 /* process one functional key; return 1 if line editing is complete (Enter/Ctrl-D) */
@@ -7153,7 +7179,7 @@ conin_line_edit(WCHAR c, HANDLE out, DWORD mode)
 
     if (c == '\r') {
         e->wbuf[e->wlen++] = L'\n';
-        if (out) {
+        if (out && !e->interrupted) {
             rb_w32_write_console_wstr(out, e->wbuf + e->wecho, e->wlen - e->wecho, mode);
             e->wecho = e->wlen;
         }
@@ -7163,7 +7189,7 @@ conin_line_edit(WCHAR c, HANDLE out, DWORD mode)
         if (e->wlen > 0) {
             e->wlen--;
             if (e->wecho > e->wlen) e->wecho = e->wlen;
-            if (out) rb_w32_write_console_wstr(out, L"\b \b", 3, mode);
+            if (out && !e->interrupted) rb_w32_write_console_wstr(out, L"\b \b", 3, mode);
         }
         return 0;
     }
@@ -7242,7 +7268,6 @@ conin_read_keys(HANDLE in, HANDLE out)
 
     if (e->interrupted) {
         conin_reset();
-        rb_w32_write_console_wstr(echo_out, L"^C", 2, output_mode);
         e->interrupted = 0;
     }
     if (e->wecho != e->wlen && echo_out) {

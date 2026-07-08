@@ -716,7 +716,7 @@ sighandler(int sig)
     ruby_signal(sig, sighandler);
 #endif
 #if defined(_WIN32)
-    if (sig == SIGINT) rb_w32_conin_set_interrupt(sig);
+    if (sig == SIGINT) rb_w32_conin_set_interrupt(0);
 #endif
     errno = old_errnum;
 }
