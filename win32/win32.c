@@ -688,6 +688,7 @@ struct conin_edit {
     char *mbuf;
     size_t mblen, mbpos;
     int state;
+    int interrupted;
 };
 static struct conin_edit conin_edit = {0};
 
@@ -7137,6 +7138,13 @@ conin_reset(void)
     conin_edit.state = CONIN_INCOMPLETE;
 }
 
+/* License: Ruby's */
+void
+rb_w32_conin_set_interrupt(int sig)
+{
+    conin_edit.interrupted = 1;
+}
+
 /* process one functional key; return 1 if line editing is complete (Enter/Ctrl-D) */
 static int
 conin_line_edit(WCHAR c, HANDLE out, DWORD mode)
@@ -7232,6 +7240,11 @@ conin_read_keys(HANDLE in, HANDLE out)
         }
     }
 
+    if (e->interrupted) {
+        conin_reset();
+        rb_w32_write_console_wstr(echo_out, L"^C", 2, output_mode);
+        e->interrupted = 0;
+    }
     if (e->wecho != e->wlen && echo_out) {
         rb_w32_write_console_wstr(echo_out, e->wbuf + e->wecho, e->wlen - e->wecho, output_mode);
         e->wecho = e->wlen;

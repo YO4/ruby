@@ -639,12 +639,16 @@ ruby_posix_signal(int signum, sighandler_t handler)
 }
 
 #elif defined _WIN32
+void rb_w32_conin_set_interrupt(int sig);
 static inline sighandler_t
 ruby_signal(int signum, sighandler_t handler)
 {
     if (signum == SIGKILL) {
         errno = EINVAL;
         return SIG_ERR;
+    }
+    else if (signum == SIGINT && handler == SIG_IGN) {
+        handler = rb_w32_conin_set_interrupt;
     }
     return signal(signum, handler);
 }
@@ -711,7 +715,9 @@ sighandler(int sig)
 #if !defined(BSD_SIGNAL) && !defined(POSIX_SIGNAL)
     ruby_signal(sig, sighandler);
 #endif
-
+#if defined(_WIN32)
+    if (sig == SIGINT) rb_w32_conin_set_interrupt(sig);
+#endif
     errno = old_errnum;
 }
 

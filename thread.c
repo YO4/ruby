@@ -2608,6 +2608,9 @@ threadptr_get_interrupts(rb_thread_t *th)
 }
 
 static void threadptr_interrupt_exec_exec(rb_thread_t *th);
+#ifdef _WIN32
+void rb_w32_conin_flush(void);
+#endif
 
 // Execute interrupts on currently running thread
 // In certain situations, calling this function will raise an exception. Some examples are:
