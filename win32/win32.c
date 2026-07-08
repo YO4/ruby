@@ -691,6 +691,15 @@ struct conin_edit {
 };
 static struct conin_edit conin_edit = {0};
 
+#ifndef CONSOLE_READ_NOREMOVE
+#define CONSOLE_READ_NOREMOVE 0x0001
+#endif
+#ifndef CONSOLE_READ_NOWAIT
+#define CONSOLE_READ_NOWAIT   0x0002
+#endif
+typedef BOOL (WINAPI *ReadConsoleInputExW_func)(HANDLE, PINPUT_RECORD, DWORD, LPDWORD, USHORT);
+static ReadConsoleInputExW_func pReadConsoleInputExW = NULL;
+
 /* License: Ruby's */
 static void
 constat_delete(HANDLE h)
@@ -783,6 +792,9 @@ StartSockets(void)
     InitializeCriticalSection(&socklist_mutex);
     InitializeCriticalSection(&conlist_mutex);
     InitializeCriticalSection(&conin_mutex);
+
+    pReadConsoleInputExW = (ReadConsoleInputExW_func)
+        get_proc_address("kernel32", "ReadConsoleInputExW", NULL);
 
     atexit(exit_handler);
 }
@@ -7171,31 +7183,29 @@ conin_read_keys(HANDLE in, HANDLE out)
     DWORD output_mode = 0;
     HANDLE echo_out = NULL;
     struct conin_edit *e = &conin_edit;
-    DWORD avail = 0;
-    int echo = 0;
+    BOOL line_input;
 
     if (e->state == CONIN_COMPLETE) return e->state; /* already completed; wait for consume */
     if (!GetConsoleMode(in, &mode)) {
         conin_mark_invalid(); return CONIN_EBADF;
     }
-    if ((mode & ENABLE_ECHO_INPUT) && (mode & ENABLE_LINE_INPUT)
-        && GetConsoleMode(out, &output_mode)) {
+    line_input = !!(mode & ENABLE_LINE_INPUT);
+    if (line_input && (mode & ENABLE_ECHO_INPUT) &&
+        GetConsoleMode(out, &output_mode)) {
         echo_out = out;
     }
-    if (!GetNumberOfConsoleInputEvents(in, &avail)) {
-        conin_mark_invalid(); return CONIN_EBADF;
+    if (!pReadConsoleInputExW) {
+        return CONIN_EBADF;
     }
 
-    while (avail-- > 0) {
+    for (;;) {
         INPUT_RECORD ir;
-        DWORD n;
+        DWORD n = 0;
         KEY_EVENT_RECORD *ke;
         WCHAR c;
 
-        if (!ReadConsoleInputW(in, &ir, 1, &n) || n == 0) {
-            conin_mark_invalid();
-            return CONIN_EBADF;
-        }
+        if (!pReadConsoleInputExW(in, &ir, 1, &n, CONSOLE_READ_NOWAIT) || n == 0)
+            break;
         if (ir.EventType != KEY_EVENT) continue;
         ke = &ir.Event.KeyEvent;
         if (!ke->bKeyDown) {
@@ -7209,7 +7219,7 @@ conin_read_keys(HANDLE in, HANDLE out)
         if (e->wlen + 1 > e->wcap && e->wcap < 32768) {
             size_t ncap = e->wcap ? e->wcap * 2 : 4096;
             WCHAR *nb = (WCHAR *)realloc(e->wbuf, ncap * sizeof(WCHAR));
-            if (!nb) { conin_mark_invalid(); return CONIN_EBADF; }
+            if (!nb) { return CONIN_EBADF; }
             e->wbuf = nb;
             e->wcap = ncap;
         }
