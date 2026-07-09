@@ -7234,6 +7234,23 @@ rb_w32_read_internal(int fd, void *buf, size_t size, rb_off_t *offset)
         return -1;
     }
 
+    if (is_console(sock)) {
+        DWORD nread = 0;
+        if (!ReadConsoleA((HANDLE)sock, buf, (DWORD)size, &nread, NULL)) {
+            errno = map_errno(GetLastError());
+            return -1;
+        }
+        if (GetLastError() == ERROR_OPERATION_ABORTED) {
+            errno = EINTR;
+            return -1;
+        }
+        if (nread == 0) {
+            _set_osflags(fd, _osfile(fd) | FEOFLAG);
+            return 0;
+        }
+        return (ssize_t)nread;
+    }
+
     if (!offset && _osfile(fd) & FTEXT) {
         return _read(fd, buf, size);
     }

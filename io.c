@@ -2644,6 +2644,19 @@ rb_io_rewind(VALUE io)
 static int
 fptr_wait_readable(rb_io_t *fptr)
 {
+#ifdef _WIN32
+    if (errno == EINTR) {
+        /* ensure signal handler thread complete */
+        rb_thread_t *th = GET_THREAD();
+        if (th == th->vm->ractor.main_thread) {
+            do {
+                rb_threadptr_check_signal(th);
+                if (rb_thread_interrupted(th->self)) break;
+                else rb_thread_sleep(0);
+            } while (1);
+        }
+    }
+#endif
     int result = rb_io_maybe_wait_readable(errno, fptr->self, RUBY_IO_TIMEOUT_DEFAULT);
 
     if (result)
