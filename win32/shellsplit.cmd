@@ -10,6 +10,7 @@ set QTD=
 
 set INPUT=%INPUT:#=#35%
 set INPUT=%INPUT:@=#64%
+set INPUT=%INPUT:)=#41%
 set "PENDING=%INPUT:"=@sep%" &:: escape double quotes and split consecutive marks
 
 ::#### split into unquoted part, quoted part, remains
@@ -97,6 +98,7 @@ goto :loop
 :return_arg
 
 set "argv=%OUTBUF%"
+if defined argv (set "argv=%argv:#41=)%")
 if defined argv (set "argv=%argv:#64=@%")
 if defined argv (set "argv=%argv:#35=#%")
 
@@ -106,6 +108,7 @@ if defined QTD (set QTD="%QTD%")
 
 if defined PENDING set PENDING=%PENDING:@sep="%
 set args=%UNQ%%QTD%%PENDING%
+if defined args set args=%args:#41=)%
 if defined args set args=%args:#64=@%
 if defined args set args=%args:#35=#%
 
