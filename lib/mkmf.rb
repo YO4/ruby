@@ -2184,6 +2184,7 @@ LD = #{CONFIG['LD']}
 EXEEXT = #{CONFIG['EXEEXT']}
 
 }
+    mk << "USE_DEBUG_CRUNTIME = #{CONFIG["USE_DEBUG_CRUNTIME"]}\n" if $mswin
     CONFIG.each do |key, val|
       mk << "#{key} = #{val}\n" if /^RUBY.*NAME/ =~ key
     end

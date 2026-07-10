@@ -10,8 +10,10 @@ require 'rbconfig'
 
 dir_config 'zlib'
 
+zlibsuffix = (RbConfig::CONFIG['USE_DEBUG_CRUNTIME'] == 'yes') ? 'd' : ''
+
 libs = $libs
-have_zlib = %w'z libz zlib1 zlib zdll zlibwapi'.any? {|z| have_library(z, 'deflateReset(NULL)', 'zlib.h')}
+have_zlib = %w'z libz zlib1 zlib zdll zlibwapi'.any? {|z| have_library("#{z}#{zlibsuffix}", 'deflateReset(NULL)', 'zlib.h')}
 
 unless have_zlib
   $libs = libs

@@ -200,7 +200,7 @@ ruby_version = $(ruby_version)+$(ABI_VERSION)
 RUBY_PROGRAM_VERSION = $(MAJOR).$(MINOR).$(TEENY)
 
 !ifndef RUBY_SO_NAME
-RUBY_SO_NAME = $(RT)-$(RUBY_BASE_NAME)$(MAJOR)$(MINOR)0
+RUBY_SO_NAME = $(RT)-$(RUBY_BASE_NAME)$(MAJOR)$(MINOR)0$(USE_DEBUG_CRUNTIME:yes=d)
 !if "$(ARCH)" != "i386"
 RUBY_SO_NAME = $(ARCH)-$(RUBY_SO_NAME)
 !endif
@@ -270,7 +270,11 @@ CPPOUTFLAG    = -Fi
 CSRCFLAG      = -Tc
 !endif
 !if !defined(RUNTIMEFLAG)
+! if "$(USE_DEBUG_CRUNTIME)" == "yes"
+RUNTIMEFLAG   = -MDd
+! else
 RUNTIMEFLAG   = -MD
+! endif
 !endif
 !if !defined(COMPILERFLAG)
 COMPILERFLAG  = -Zm600
@@ -609,8 +613,16 @@ update-vcpkg::
 install-vcpkg::
 	@cd "$(srcdir:/=\)" && set LC_TIME=C && vcpkg install $(TRIPLET_OPTION)
 
+!if !defined(VCPKG_BIN_DIR)
+! if "$(USE_DEBUG_CRUNTIME)" == "yes"
+VCPKG_BIN_DIR=$(srcdir)/vcpkg_installed/$(VCPKG_DEFAULT_TRIPLET)/debug/bin
+! else
+VCPKG_BIN_DIR=$(srcdir)/vcpkg_installed/$(VCPKG_DEFAULT_TRIPLET)/bin
+! endif
+!endif
+
 prepare-vcpkg::
-	for %%I in ($(srcdir:/=\)\vcpkg_installed\$(VCPKG_DEFAULT_TRIPLET)\bin\*.dll) do @( \
+	for %%I in ($(VCPKG_BIN_DIR:/=\)\*.dll) do @( \
 		if not %%~nI == readline mklink %%~nxI %%I \
 	)
 
@@ -1094,6 +1106,7 @@ s,@top_srcdir@,$(srcdir),;t t
 s,@try_header@,try_compile,;t t
 s,@ruby_pc@,$(ruby_pc),;t t
 s,@PKG_CONFIG@,$(PKG_CONFIG),;t t
+s,@USE_DEBUG_CRUNTIME@,$(USE_DEBUG_CRUNTIME),;t t
 <<KEEP
 
 !if "$(HAVE_BASERUBY)" != "yes" || "$(CROSS_COMPILING)" == "yes"

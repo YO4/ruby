@@ -37,10 +37,28 @@ call :set "WIN32DIR=%%WIN32DIR:%~x0:/:=:/:%%"
 call :set "WIN32DIR=%%WIN32DIR:/%~n0:/:=:/:%%"
 set "WIN32DIR=%WIN32DIR:~0,-3%"
 
+if not defined VCPKG_DEFAULT_TRIPLET (
+  ::- default to the current processor.
+  set "arch=%PROCESSOR_ARCHITECTURE%"
+  for %%i in (a b c d e f g h i j k l m n o p q r s t u v w x y z) do @(
+    call set "arch=%%arch:%%i=%%i%%"
+  )
+)
+if not defined VCPKG_DEFAULT_TRIPLET (
+  if "%arch%" == "x86_64" set "arch=x64"
+  if "%arch%" == "amd64" set "arch=x64"
+  call set "VCPKG_DEFAULT_TRIPLET=%%arch%%-windows"
+)
+
 set configure=%~0
 set args=%*
 set target=
 set optdirs=
+set optidirs=
+set optldirs=
+set vcpkgdirs=
+set vcpkgidirs=
+set vcpkgldirs=
 set pathlist=
 set config_make=confargs~%RANDOM%.mak
 set confargs=%config_make:.mak=.sub%
@@ -60,7 +78,7 @@ for /f "delims== tokens=1,*" %%I in (" %argv1% ") do ((set "opt=%%I") && (set "a
     set "opt=%opt:~0,-1%"
   )
   if "%opt%"=="" (
-    echo 1>&2 %configure%: assignment for empty variable name %argv1%
+    call echo 1>&2 %configure%: assignment for empty variable name %argv1:)=^)%
     exit /b 1
   )
   if "%opt%" == "--debug-configure" (
@@ -157,7 +175,18 @@ goto :loopend ;
     echo>> %config_make% RUBY_DEVEL = %enable%
   )
   if "%feature%" == "rubygems" (
-     echo>> %config_make% USE_RUBYGEMS = %enable%
+    echo>> %config_make% USE_RUBYGEMS = %enable%
+  )
+  if "%feature%" == "debug-cruntime" (
+    if "%enable%" == "yes" (
+      echo>> %config_make% USE_DEBUG_CRUNTIME = %enable%
+    )
+  )
+  if "%feature%" == "vcpkg" (
+    if "%enable%" == "yes" (
+      set "arg=%WIN32DIR%/../vcpkg_installed/%VCPKG_DEFAULT_TRIPLET%"
+      goto :vcpkg-dir
+    )
   )
 goto :loopend ;
 :withoutarg
@@ -170,11 +199,16 @@ goto :loop ;
 :witharg
   if "%opt%" == "--with-static-linked-ext" goto :extstatic
   if "%eq%" == "" call :take_arg
-  if not "%arg%" == "" (
-    echo>>%confargs%  "%opt%=%arg:$=$$%" \
-  ) else (
-    echo>>%confargs%  "%opt%%eq%" \
-  )
+  if not "%opt%" == "--with-vcpkg-dir" (
+  if not "%opt%" == "--with-opt-dir" (
+  if not "%opt%" == "--with-opt-include" (
+  if not "%opt%" == "--with-opt-lib" (
+    if not "%arg%" == "" (
+      echo>>%confargs%  "%opt%=%arg:$=$$%" \
+    ) else (
+      echo>>%confargs%  "%opt%%eq%" \
+    )
+  ))))
   if "%opt%" == "--with-baseruby" goto :baseruby
   if "%opt%" == "--with-ntver" goto :ntver
   if "%opt%" == "--with-libdir" goto :libdir
@@ -184,6 +218,9 @@ goto :loop ;
   if "%opt%" == "--with-gmp" goto :gmp
   if "%opt%" == "--with-destdir" goto :destdir
   if "%opt%" == "--with-dump-ast" goto :dump-ast
+  if "%opt%" == "--with-vcpkg-dir" goto :vcpkg-dir
+  if "%opt%" == "--with-opt-include" goto :opt-include
+  if "%opt%" == "--with-opt-lib" goto :opt-lib
 goto :loop ;
 :ntver
   ::- For version constants, see
@@ -251,6 +288,36 @@ goto :loop ;
     )
   if not "%arg%" == "" goto :optdir-loop
 goto :loop ;
+:vcpkg-dir
+  if "%arg%" == "" (
+    echo 1>&2 %configure%: missing argument for %opt%
+    exit /b 1
+  )
+  :vcpkgdir-loop
+  for /f "delims=; tokens=1,*" %%I in ("%arg%") do (set "d=%%I" & set "arg=%%J")
+    pushd %d:/=\% 2> nul && (
+      call :set "vcpkgdirs=%vcpkgdirs%;%%CD:\=/%%"
+      popd
+    ) || (
+      set "vcpkgdirs=%vcpkgdirs%;%d:\=/%"
+    )
+  if not "%arg%" == "" goto :vcpkgdir-loop
+goto :loop ;
+:opt-include
+  if "%arg%" == "" (
+    echo 1>&2 %configure%: missing argument for %opt%
+    exit /b 1
+  )
+  set "optidirs=%arg%"
+goto :loop ;
+:opt-lib
+  if "%arg%" == "" (
+    echo 1>&2 %configure%: missing argument for %opt%
+    exit /b 1
+  )
+  set "optldirs=%arg%"
+goto :loop ;
+:opt-specific
 :help
   echo Configuration:
   echo   --help                  display this help
@@ -259,12 +326,15 @@ goto :loop ;
   echo   --prefix=PREFIX         install files in PREFIX [/usr]
   echo System types:
   echo   --target=TARGET         configure for TARGET [i386-mswin32]
+  echo   --enable-debug-cruntime use debug runtime(ucrtbased.dll)
   echo Optional Package:
   echo   --with-baseruby=RUBY    use RUBY as baseruby [ruby]
   echo   --with-static-linked-ext link external modules statically
   echo   --with-ext="a,b,..."    use extensions a, b, ...
   echo   --without-ext="a,b,..." ignore extensions a, b, ...
   echo   --with-opt-dir="DIR-LIST" add optional headers and libraries directories separated by ';'
+  echo   --with-vcpkg-dir="DIR-LIST" add optional vcpkg installation root to opt-dir
+  echo   --enable-vcpkg          add default vcpkg installation directory to opt-dir
   echo   --disable-install-doc   do not install rdoc indexes during install
   echo   --with-ntver=0xXXXX     target NT version (shouldn't use with old SDK)
   echo   --with-ntver=_WIN32_WINNT_XXXX
@@ -279,8 +349,37 @@ goto :EOF
   ) 1>&2
   exit /b 1
 :end
+if not defined vcpkgdirs goto :skip-vcpkg-dir
+  if not "%optidirs%" == "" (
+    echo 1>&2 %configure%: --with-vcpkg and --enable-vcpkg cannot be combined with --with-opt-include
+    exit /b 1
+  )
+  if not "%optldirs%" == "" (
+    echo 1>&2 %configure%: --with-vcpkg and --enable-vcpkg cannot be combined with --with-opt-lib
+    exit /b 1
+  )
+  set "arg=%vcpkgdirs%"
+  :vcpkgbindir-loop
+    for /f "delims=; tokens=1,*" %%I in ("%arg%") do (set "d=%%I" & set "arg=%%J")
+      set "vcpkgidirs=%vcpkgidirs%;%d%
+      set "vcpkgldirs=%vcpkgldirs%;%d%$(USE_DEBUG_CRUNTIME:yes=/debug)
+    if not "%arg%" == "" goto :vcpkgbindir-loop
+:skip-vcpkg-dir
+set "optdirs=%optdirs%;"
+set vcpkgidirs=%vcpkgidirs%;%optdirs:~1%
+set vcpkgldirs=%vcpkgldirs%;%optdirs:~1%
+if not "%vcpkgidirs%" == ";" set vcpkgidirs=%vcpkgidirs:;=/include;%
+if not "%vcpkgldirs%" == ";" set vcpkgldirs=%vcpkgldirs:;=/lib;%
+echo %vcpkgidirs%
+if not "%vcpkgidirs%" == ";" set optidirs=%vcpkgidirs:~9,-1%
+if not "%vcpkgldirs%" == ";" set optldirs=%vcpkgldirs:~5,-1%
+echo %optidirs%
+echo %optldirs%
+if not "%optidirs%" == "" echo>>%config_make% optidirs = %optidirs%
+if not "%optldirs%" == "" echo>>%config_make% optldirs = %optldirs%
+if not "%optidirs%" == "" echo>>%confargs%  "--with-opt-include=%optidirs:$=$$%%" \
+if not "%optldirs%" == "" echo>>%confargs%  "--with-opt-lib=%optldirs:$=$$%%" \
 if "%debug_configure%" == "yes" (type %confargs%)
-if defined optdirs (echo>>%config_make% optdirs = %optdirs:~1%)
 (
   echo.
   echo configure_args = \
@@ -288,10 +387,13 @@ if defined optdirs (echo>>%config_make% optdirs = %optdirs:~1%)
   echo # configure_args
 
   echo.
-  echo !if "$(optdirs)" != ""
-  for %%I in ("$(optdirs:\=/)" "$(optdirs:/;=;)") do @echo optdirs = %%~I
-  echo XINCFLAGS = -I"$(optdirs:;=/include" -I")/include"
-  echo XLDFLAGS = -libpath:"$(optdirs:;=/lib" -libpath:")/lib"
+  echo !if "$(optidirs)" != ""
+  for %%I in ("$(optidirs:\=/)" "$(optidirs:/;=;)") do @echo optidirs = %%~I
+  echo XINCFLAGS = -I"$(optidirs:;=" -I")"
+  echo !endif
+  echo !if "$(optldirs)" != ""
+  for %%I in ("$(optldirs:\=/)" "$(optldirs:/;=;)") do @echo optldirs = %%~I
+  echo XLDFLAGS = -libpath:"$(optldirs:;=" -libpath:")"
   echo !endif
 
   if not "%pathlist%" == "" (
