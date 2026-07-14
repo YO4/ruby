@@ -151,6 +151,8 @@ VALUE rb_io_prep_stderr(void);
 int rb_io_notify_close(struct rb_io *fptr);
 bool rb_io_fptr_finalize_closed(struct rb_io *fptr);
 
+int rb_get_max_fd(void);
+
 RUBY_SYMBOL_EXPORT_BEGIN
 /* io.c (export) */
 void rb_maygvl_fd_fix_cloexec(int fd);

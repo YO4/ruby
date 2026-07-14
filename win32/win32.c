@@ -69,6 +69,10 @@
 #include "encindex.h"
 #define isdirsep(x) ((x) == '/' || (x) == '\\')
 
+/* Declared in internal/io.h; we avoid pulling that header in here because it
+ * redefines struct rb_io against the copy already provided by ruby/io.h. */
+int rb_get_max_fd(void);
+
 static int w32_wopen(const WCHAR *file, int oflag, int perm);
 static int w32_stati128(const char *path, struct stati128 *st, UINT cp, BOOL lstat);
 static char *w32_getenv(const char *name, UINT cp);
@@ -1189,14 +1193,52 @@ child_result(struct ChildRecord *child, int mode)
     return child->pid;
 }
 
+/* Shared inheritance state prepared from the spawn actions and consumed by
+ * CreateChild.  prepare_inherit_state() fills the lpReserved2 buffer and the
+ * resolved standard handles; prepare_inheritable_handle_list() and
+ * build_attribute_list() fill the PROC_THREAD_ATTRIBUTE_HANDLE_LIST scratch.
+ *
+ * When PTY support is added, a PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE attribute
+ * can be supplied to build_attribute_list() alongside the handle list without
+ * restructuring CreateChild. */
+struct rb_w32_inherit_state {
+    BYTE *reserved2;            /* malloc'd lpReserved2 buffer (or NULL) */
+    WORD cbReserved2;
+    int inherit_count;          /* # of fd entries in the buffer */
+    const unsigned char *p_flags;
+    const intptr_t *p_handle;
+    HANDLE hStd[3];             /* input, output, error */
+
+    /* PROC_THREAD_ATTRIBUTE_HANDLE_LIST scratch (owned by this struct, freed
+     * by the caller).  forced[] records handles whose inherit flag we toggled
+     * on so they can be reverted after CreateProcessW. */
+    HANDLE *keep;
+    HANDLE *forced;
+    int keep_count;
+    int forced_count;
+};
+
+/* Forward declarations: the inherit-state helpers are defined later, right
+ * after rb_w32_set_cloexec. */
+static int prepare_inherit_state(const struct rb_w32_spawn_actions *actions,
+                                 HANDLE hInput, HANDLE hOutput, HANDLE hError,
+                                 struct rb_w32_inherit_state *st);
+static int prepare_inheritable_handle_list(struct rb_w32_inherit_state *st);
+static LPPROC_THREAD_ATTRIBUTE_LIST build_attribute_list(struct rb_w32_inherit_state *st, HANDLE hPseudoConsole);
+
 /* License: Ruby's */
 static int
-CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog, HANDLE hInput, HANDLE hOutput, HANDLE hError, DWORD dwCreationFlags)
+CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
+            HANDLE hInput, HANDLE hOutput, HANDLE hError, DWORD dwCreationFlags,
+            const struct rb_w32_spawn_actions *actions)
 {
     BOOL fRet;
     STARTUPINFOW aStartupInfo;
+    STARTUPINFOEXW aStartupInfoEx;
     PROCESS_INFORMATION aProcessInformation;
     SECURITY_ATTRIBUTES sa;
+    struct rb_w32_inherit_state st;
+    LPPROC_THREAD_ATTRIBUTE_LIST attrlist = NULL;
 
     if (!cmd && !prog) {
         errno = EFAULT;
@@ -1210,45 +1252,98 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog, HAND
 
     sa.nLength              = sizeof(SECURITY_ATTRIBUTES);
     sa.lpSecurityDescriptor = NULL;
+    /* bInheritHandle is kept TRUE so the child's CRT honours the STARTUPINFO
+     * standard handles.  The precise set of inherited handles is restricted
+     * further below via PROC_THREAD_ATTRIBUTE_HANDLE_LIST. */
     sa.bInheritHandle       = TRUE;
 
     memset(&aStartupInfo, 0, sizeof(aStartupInfo));
     memset(&aProcessInformation, 0, sizeof(aProcessInformation));
+
     aStartupInfo.cb = sizeof(aStartupInfo);
     aStartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    if (hInput) {
-        aStartupInfo.hStdInput  = hInput;
+
+    /* Prepare the lpReserved2 buffer and the resolved standard handles from
+     * the spawn actions. */
+    if (!prepare_inherit_state(actions, hInput, hOutput, hError, &st)) {
+        child->pid = 0;
+        return FALSE;           /* errno == ENOMEM */
     }
-    else {
-        aStartupInfo.hStdInput  = GetStdHandle(STD_INPUT_HANDLE);
-    }
-    if (hOutput) {
-        aStartupInfo.hStdOutput = hOutput;
-    }
-    else {
-        aStartupInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-    }
-    if (hError) {
-        aStartupInfo.hStdError = hError;
-    }
-    else {
-        aStartupInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-    }
+    aStartupInfo.cbReserved2 = st.cbReserved2;
+    aStartupInfo.lpReserved2 = st.reserved2;
+    aStartupInfo.hStdInput = st.hStd[0];
+    aStartupInfo.hStdOutput = st.hStd[1];
+    aStartupInfo.hStdError = st.hStd[2];
 
     dwCreationFlags |= NORMAL_PRIORITY_CLASS;
 
     if (lstrlenW(cmd) > 32767) {
+        free(st.reserved2);
         child->pid = 0;		/* release the slot */
         errno = E2BIG;
         return FALSE;
     }
 
+    /* Restrict inheritance to exactly the file descriptors in the inherit
+     * table.  bInheritHandle stays TRUE so the child's CRT still honours the
+     * STARTUPINFO standard handles, but a PROC_THREAD_ATTRIBUTE_HANDLE_LIST
+     * (passed through STARTUPINFOEX) tells the kernel to inherit *only* the
+     * enumerated handles.  This prevents every other inheritable parent
+     * handle (e.g. the parent's own stdout pipe) from leaking into the child
+     * and blocking EOF detection, without mutating the inherit flag of
+     * unrelated handles -- which would race against other spawning threads. */
+    sa.bInheritHandle = TRUE;
+
+    if (st.reserved2) {
+        if (!prepare_inheritable_handle_list(&st)) {
+            free(st.reserved2);
+            child->pid = 0;
+            return FALSE;       /* errno == ENOMEM */
+        }
+        if (st.keep_count == 0) {
+            /* Nothing to inherit: make sure the child inherits no handle. */
+            sa.bInheritHandle = FALSE;
+        }
+        else {
+            attrlist = build_attribute_list(&st, NULL);
+            if (!attrlist) {
+                free(st.reserved2);
+                child->pid = 0;
+                return FALSE;   /* errno set by build_attribute_list */
+            }
+        }
+    }
+
+    memset(&aStartupInfoEx, 0, sizeof(aStartupInfoEx));
+    if (attrlist) {
+        aStartupInfoEx.StartupInfo = aStartupInfo;
+        aStartupInfoEx.StartupInfo.cb = sizeof(aStartupInfoEx);
+        aStartupInfoEx.lpAttributeList = attrlist;
+        dwCreationFlags |= EXTENDED_STARTUPINFO_PRESENT;
+    }
+
     RUBY_CRITICAL {
         fRet = CreateProcessW(prog, (WCHAR *)cmd, &sa, &sa,
                               sa.bInheritHandle, dwCreationFlags, NULL, NULL,
-                              &aStartupInfo, &aProcessInformation);
-        errno = map_errno(GetLastError());
+                              attrlist ? &aStartupInfoEx.StartupInfo : &aStartupInfo,
+                              &aProcessInformation);
+        if (!fRet)
+            errno = map_errno(GetLastError());
     }
+
+    /* Revert the inherit flag on the handles we forced inheritable. */
+    if (st.forced) {
+        for (int i = 0; i < st.forced_count; i++)
+            SetHandleInformation(st.forced[i], HANDLE_FLAG_INHERIT, 0);
+    }
+
+    if (attrlist) {
+        DeleteProcThreadAttributeList(attrlist);
+        free(attrlist);
+    }
+    free(st.keep);
+    free(st.forced);
+    free(st.reserved2);
 
     if (!fRet) {
         child->pid = 0;		/* release the slot */
@@ -1288,7 +1383,8 @@ is_batch(const char *cmd)
 
 /* License: Artistic or GPL */
 static rb_pid_t
-w32_spawn(int mode, const char *cmd, const char *prog, UINT cp)
+w32_spawn(int mode, const char *cmd, const char *prog, UINT cp,
+          const struct rb_w32_spawn_actions *actions)
 {
     char fbuf[PATH_MAX];
     char *p = NULL;
@@ -1405,7 +1501,7 @@ w32_spawn(int mode, const char *cmd, const char *prog, UINT cp)
 
     if (!e) {
         struct ChildRecord *child = FindFreeChildSlot();
-        if (CreateChild(child, wcmd, wshell, NULL, NULL, NULL, 0)) {
+        if (CreateChild(child, wcmd, wshell, NULL, NULL, NULL, 0, actions)) {
             ret = child_result(child, mode);
         }
     }
@@ -1420,20 +1516,29 @@ rb_pid_t
 rb_w32_spawn(int mode, const char *cmd, const char *prog)
 {
     /* assume ACP */
-    return w32_spawn(mode, cmd, prog, filecp());
+    return w32_spawn(mode, cmd, prog, filecp(), NULL);
 }
 
 /* License: Ruby's */
 rb_pid_t
 rb_w32_uspawn(int mode, const char *cmd, const char *prog)
 {
-    return w32_spawn(mode, cmd, prog, CP_UTF8);
+    return w32_spawn(mode, cmd, prog, CP_UTF8, NULL);
+}
+
+/* License: Ruby's */
+rb_pid_t
+rb_w32_uspawn_inherit(int mode, const char *cmd, const char *prog, UINT cp,
+                      const struct rb_w32_spawn_actions *actions)
+{
+    return w32_spawn(mode, cmd, prog, cp, actions);
 }
 
 /* License: Artistic or GPL */
 static rb_pid_t
 w32_spawn_process(int mode, const char *prog, char *const *argv,
-                  int in_fd, int out_fd, int err_fd, DWORD flags, UINT cp)
+                  int in_fd, int out_fd, int err_fd, DWORD flags, UINT cp,
+                  const struct rb_w32_spawn_actions *actions)
 {
     int c_switch = 0;
     size_t len;
@@ -1505,7 +1610,7 @@ w32_spawn_process(int mode, const char *prog, char *const *argv,
 
     if (!e) {
         struct ChildRecord *child = FindFreeChildSlot();
-        if (CreateChild(child, wcmd, wprog, in_handle, out_handle, err_handle, flags)) {
+        if (CreateChild(child, wcmd, wprog, in_handle, out_handle, err_handle, flags, actions)) {
             ret = child_result(child, mode);
         }
     }
@@ -1520,21 +1625,21 @@ rb_pid_t
 rb_w32_aspawn_flags(int mode, const char *prog, char *const *argv, DWORD flags)
 {
     /* assume ACP */
-    return w32_spawn_process(mode, prog, argv, -1, -1, -1, flags, filecp());
+    return w32_spawn_process(mode, prog, argv, -1, -1, -1, flags, filecp(), NULL);
 }
 
 /* License: Ruby's */
 rb_pid_t
 rb_w32_uaspawn_flags(int mode, const char *prog, char *const *argv, DWORD flags)
 {
-    return w32_spawn_process(mode, prog, argv, -1, -1, -1, flags, CP_UTF8);
+    return w32_spawn_process(mode, prog, argv, -1, -1, -1, flags, CP_UTF8, NULL);
 }
 
 /* License: Ruby's */
 rb_pid_t
 rb_w32_aspawn(int mode, const char *prog, char *const *argv)
 {
-    return w32_spawn_process(mode, prog, argv, -1, -1, -1, 0, filecp());
+    return w32_spawn_process(mode, prog, argv, -1, -1, -1, 0, filecp(), NULL);
 }
 
 /* License: Ruby's */
@@ -1546,11 +1651,20 @@ rb_w32_uaspawn(int mode, const char *prog, char *const *argv)
 
 /* License: Ruby's */
 rb_pid_t
+rb_w32_uaspawn_inherit(int mode, const char *prog, char *const *argv,
+                       DWORD flags, UINT cp,
+                       const struct rb_w32_spawn_actions *actions)
+{
+    return w32_spawn_process(mode, prog, argv, -1, -1, -1, flags, cp, actions);
+}
+
+/* License: Ruby's */
+rb_pid_t
 rb_w32_uspawn_process(int mode, const char *prog, char *const *argv,
                       int in_fd, int out_fd, int err_fd, DWORD flags)
 {
     return w32_spawn_process(mode, prog, argv, in_fd, out_fd, err_fd,
-                             flags, CP_UTF8);
+                             flags, CP_UTF8, NULL);
 }
 
 /* License: Artistic or GPL */
@@ -2624,6 +2738,505 @@ _pioinfo(int fd)
 #define FAPPEND			0x20	/* file handle opened O_APPEND */
 #define FDEV			0x40	/* file handle refers to device */
 #define FTEXT			0x80	/* file handle is in text mode */
+
+/* License: Ruby's */
+unsigned char
+rb_w32_get_osfile(int fd)
+{
+    /* Expose the CRT-internal _osfile entry to external callers (notably
+     * process.c, which builds the lpReserved2 inheritance table).  We guard
+     * the access with _get_osfhandle because _osfile() dereferences into
+     * the CRT __pioinfo table and may read garbage for an unallocated fd.
+     * Returns 0 for such fds. */
+    if (_get_osfhandle(fd) == (intptr_t)-1)
+        return 0;
+    return _osfile(fd);
+}
+
+/* License: Ruby's */
+int
+rb_w32_set_cloexec(int fd, int cloexec)
+{
+    /* Emulate fcntl(fd, F_SETFD, FD_CLOEXEC/FD_CLOEXEC cleared) on Windows.
+     * Two things must be kept in sync:
+     *   - the OS-level HANDLE_FLAG_INHERIT bit, which controls what
+     *     CreateProcessW(bInheritHandle=TRUE) actually duplicates into the
+     *     child; and
+     *   - the CRT _osfile FNOINHERIT bit, which rb_w32_get_osfile / the
+     *     lpReserved2 inheritance table consult to decide whether a fd is
+     *     inheritable.
+     * Without this, fds 3+ created on Windows stay inheritable and leak into
+     * every child process (see the win_inherit_fds work). */
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == (HANDLE)-1)
+        return -1;
+    if (!SetHandleInformation(h, HANDLE_FLAG_INHERIT,
+                              cloexec ? 0 : HANDLE_FLAG_INHERIT)) {
+        errno = map_errno(GetLastError());
+        return -1;
+    }
+    if (cloexec)
+        _osfile(fd) |= FNOINHERIT;
+    else
+        _osfile(fd) &= ~FNOINHERIT;
+    return 0;
+}
+
+/* Concrete layout of the redirection requests.  This is private to win32.c:
+ * callers build it only through rb_w32_spawn_actions_*, so they never see
+ * these fields.  fd_close / fd_dup2 / fd_dup2_child are growable arrays
+ * (the *_cap members track capacity); close_others_maxhint is maintained as
+ * the highest fd referenced by any added entry. */
+struct rb_w32_fd_pair {
+    int oldfd;   /* source fd */
+    int newfd;   /* target fd */
+};
+
+struct rb_w32_spawn_actions {
+    int close_others_maxhint;
+    int fd_close_count;
+    int fd_close_cap;
+    int *fd_close;
+    int fd_dup2_count;
+    int fd_dup2_cap;
+    struct rb_w32_fd_pair *fd_dup2;
+    int fd_dup2_child_count;
+    int fd_dup2_child_cap;
+    struct rb_w32_fd_pair *fd_dup2_child;
+};
+
+struct rb_w32_spawn_actions *
+rb_w32_spawn_actions_init(void)
+{
+    struct rb_w32_spawn_actions *actions = ALLOC(struct rb_w32_spawn_actions);
+    memset(actions, 0, sizeof(*actions));
+    return actions;
+}
+
+void
+rb_w32_spawn_actions_destroy(struct rb_w32_spawn_actions *actions)
+{
+    if (!actions) return;
+    if (actions->fd_close) xfree(actions->fd_close);
+    if (actions->fd_dup2) xfree(actions->fd_dup2);
+    if (actions->fd_dup2_child) xfree(actions->fd_dup2_child);
+    xfree(actions);
+}
+
+static void
+spawn_actions_note_fd(struct rb_w32_spawn_actions *actions, int fd)
+{
+    if (fd > actions->close_others_maxhint)
+        actions->close_others_maxhint = fd;
+}
+
+static void
+spawn_actions_add_int(struct rb_w32_spawn_actions *actions,
+                      int **arr, int *count, int *cap, int v)
+{
+    if (*count >= *cap) {
+        *cap = *cap ? *cap * 2 : 4;
+        REALLOC_N(*arr, int, *cap);
+    }
+    (*arr)[(*count)++] = v;
+    spawn_actions_note_fd(actions, v);
+}
+
+static void
+spawn_actions_add_pair(struct rb_w32_spawn_actions *actions,
+                       struct rb_w32_fd_pair **arr, int *count, int *cap,
+                       int oldfd, int newfd)
+{
+    if (*count >= *cap) {
+        *cap = *cap ? *cap * 2 : 4;
+        REALLOC_N(*arr, struct rb_w32_fd_pair, *cap);
+    }
+    (*arr)[*count].oldfd = oldfd;
+    (*arr)[*count].newfd = newfd;
+    (*count)++;
+    spawn_actions_note_fd(actions, oldfd);
+    spawn_actions_note_fd(actions, newfd);
+}
+
+void
+rb_w32_spawn_actions_addclose(struct rb_w32_spawn_actions *actions, int fd)
+{
+    spawn_actions_add_int(actions, &actions->fd_close,
+                          &actions->fd_close_count, &actions->fd_close_cap, fd);
+}
+
+void
+rb_w32_spawn_actions_adddup2(struct rb_w32_spawn_actions *actions,
+                             int oldfd, int newfd)
+{
+    spawn_actions_add_pair(actions, &actions->fd_dup2,
+                           &actions->fd_dup2_count, &actions->fd_dup2_cap,
+                           oldfd, newfd);
+}
+
+void
+rb_w32_spawn_actions_adddup2_child(struct rb_w32_spawn_actions *actions,
+                                   int oldfd, int newfd)
+{
+    spawn_actions_add_pair(actions, &actions->fd_dup2_child,
+                           &actions->fd_dup2_child_count, &actions->fd_dup2_child_cap,
+                           oldfd, newfd);
+}
+
+/*
+ * Build the lpReserved2 buffer consumed by the child's C runtime startup code
+ * (see UCRT source exec/spawnv.cpp:accumulate_inheritable_handles and
+ * lowio/ioinit.cpp:initialize_inherited_file_handles_nolock).  The buffer
+ * layout is:
+ *
+ *   [0..3]            int handle_count
+ *   [4..4+N-1]        unsigned char osfile[N]
+ *   [4+N..4+N+8*N-1]  intptr_t handle[N]
+ *
+ * Entries whose handle is INVALID_HANDLE_VALUE, or whose osfile does not have
+ * FOPEN set, are emitted as osfile=0 / handle=INVALID_HANDLE_VALUE and skipped
+ * by the child.  The buffer is built directly from the logical redirection
+ * requests (struct rb_w32_spawn_actions): the scan of every open fd and all
+ * the FNOINHERIT handling happen here, so the rest of the spawn path only ever
+ * sees this opaque byte buffer and never the CRT-internal handle/osfile
+ * details.  (CreateChild reads the per-fd handle/osfile back out of the same
+ * buffer to resolve the standard handles and the inheritable handle list.)
+ *
+ * Returns a malloc()'d buffer and stores its size in *cbReserved2_out.
+ * Returns NULL with *cbReserved2_out == 0 when there is nothing to inherit
+ * (max_fd < 0).  On malloc() failure returns NULL with errno set to ENOMEM.
+ * The caller must free() the returned buffer.  The caller must hold the GVL so
+ * that another Ruby thread cannot open/close/toggle close_on_exec on a fd
+ * concurrently while the scan runs.
+ */
+static BYTE *
+make_lpReserved2(const struct rb_w32_spawn_actions *actions,
+                 WORD *cbReserved2_out)
+{
+    int max_fd = actions->close_others_maxhint;
+    int track_max = rb_get_max_fd();
+    if (track_max > max_fd)
+        max_fd = track_max;
+
+    *cbReserved2_out = 0;
+    if (max_fd < 0)
+        return NULL;
+
+    int count = max_fd + 1;
+    size_t header_size = sizeof(int);
+    size_t flags_size = (size_t)count * sizeof(unsigned char);
+    size_t handles_size = (size_t)count * sizeof(intptr_t);
+    size_t total_size = header_size + flags_size + handles_size;
+
+    BYTE *reserved2 = (BYTE *)malloc(total_size);
+    if (!reserved2) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    *(int *)reserved2 = count;
+
+    unsigned char *p_flags = reserved2 + header_size;
+    intptr_t *p_handle = (intptr_t *)(reserved2 + header_size + flags_size);
+
+    for (int i = 0; i < count; i++) {
+        p_flags[i] = 0;
+        p_handle[i] = (intptr_t)INVALID_HANDLE_VALUE;
+    }
+
+    /* Step 1: snapshot every open fd's handle + osfile, regardless of the
+     * close_on_exec (FNOINHERIT) flag.  Unopened fds remain
+     * INVALID_HANDLE_VALUE from the initialization above and are ignored by
+     * later steps.  The FNOINHERIT flag is preserved here and stripped in
+     * Step 4: every fd that is not explicitly redirected (redirect targets
+     * have FNOINHERIT cleared in Step 3) is therefore dropped from the child,
+     * matching Unix's close_on_exec semantics without special-casing the
+     * flag during the spawn. */
+    for (int fd = 0; fd < count; fd++) {
+        unsigned char of = rb_w32_get_osfile(fd);
+        if (!(of & FOPEN))
+            continue;
+        intptr_t h = _get_osfhandle(fd);
+        if (h == (intptr_t)-1)
+            continue;
+        p_handle[fd] = h;
+        p_flags[fd] = of;
+    }
+
+    /* Step 2: fd_close removes the matching entries.  The parent's fd is NOT
+     * closed (unlike the Unix path where exec inherits and then closes); the
+     * child simply will not see it. */
+    for (int i = 0; i < actions->fd_close_count; i++) {
+        int cfd = actions->fd_close[i];
+        if (cfd >= 0 && cfd < count) {
+            p_handle[cfd] = (intptr_t)INVALID_HANDLE_VALUE;
+            p_flags[cfd] = 0;
+        }
+    }
+
+    /* Step 3: fd_dup2 describes redirections [oldfd, newfd].  Copy the source
+     * (handle, osfile) into the new position.  No dup() is required: the
+     * child's CRT will receive fd newfd backed by the same HANDLE as oldfd.
+     * Because Step 1 already registered every open fd (including
+     * close_on_exec ones), the source is always present, so the parent's own
+     * file descriptors are never consulted here.  FNOINHERIT is cleared on the
+     * target so the redirect is inherited by the child regardless of the
+     * source's close_on_exec state. */
+    for (int i = 0; i < actions->fd_dup2_count; i++) {
+        int oldfd = actions->fd_dup2[i].oldfd;
+        int newfd = actions->fd_dup2[i].newfd;
+
+        if (oldfd < 0 || oldfd >= count ||
+            p_handle[oldfd] == (intptr_t)INVALID_HANDLE_VALUE ||
+            !(p_flags[oldfd] & FOPEN))
+            continue;
+        if (newfd < 0 || newfd >= count)
+            continue;
+
+        p_handle[newfd] = p_handle[oldfd];
+        p_flags[newfd] = p_flags[oldfd] & ~FNOINHERIT;
+    }
+
+    /* fd_dup2_child entries are "self dups" resolved within the child: the
+     * new fd should duplicate the child's own oldfd.  Because oldfd may
+     * itself be the target of another redirect (e.g. STDERR=>[:child,3],
+     * 3=>[:child,4], 4=>[:child,STDOUT]), the chain is resolved by
+     * repeatedly copying the already-resolved child fd mapping until it is
+     * stable.  The source fd is read from the buffer only (it is present
+     * thanks to Step 1), so the parent's own descriptors are never consulted.
+     * Cycles are impossible here: they are rejected at parse time. */
+    {
+        int changed;
+        do {
+            changed = 0;
+            for (int i = 0; i < actions->fd_dup2_child_count; i++) {
+                int newfd = actions->fd_dup2_child[i].newfd;
+                int oldfd = actions->fd_dup2_child[i].oldfd;
+
+                if (newfd < 0 || newfd >= count)
+                    continue;
+                if (oldfd < 0 || oldfd >= count)
+                    continue;
+
+                intptr_t h = p_handle[oldfd];
+                unsigned char of = p_flags[oldfd];
+                if (h == (intptr_t)INVALID_HANDLE_VALUE || !(of & FOPEN))
+                    continue;   /* source not (yet) available */
+
+                /* Clear FNOINHERIT on the target: the redirect target is
+                 * inherited by the child regardless of the source's
+                 * close_on_exec state. */
+                of &= ~FNOINHERIT;
+
+                /* Allow overriding a value set by the implicit scan (e.g. a
+                 * stdio fd redirected via [:child, ...]); only skip when the
+                 * entry is already correct so the loop can terminate. */
+                if (p_handle[newfd] == h && p_flags[newfd] == of)
+                    continue;
+
+                p_handle[newfd] = h;
+                p_flags[newfd] = of;
+                changed = 1;
+            }
+        } while (changed);
+    }
+
+    /* Step 4: strip every fd that is still marked FNOINHERIT.  These are the
+     * close_on_exec fds that were not explicitly redirected (redirect targets
+     * had FNOINHERIT cleared in Step 3), so the child must not see them.  This
+     * is the inverse of the old Step 1 exclusion: the buffer is left free of
+     * FNOINHERIT entries, so the spawn path no longer needs to special-case
+     * the flag. */
+    for (int fd = 0; fd < count; fd++) {
+        if (p_handle[fd] == (intptr_t)INVALID_HANDLE_VALUE)
+            continue;
+        if (p_flags[fd] & FNOINHERIT) {
+            p_handle[fd] = (intptr_t)INVALID_HANDLE_VALUE;
+            p_flags[fd] = 0;
+        }
+    }
+
+    *cbReserved2_out = (WORD)total_size;
+    return reserved2;
+}
+
+
+/* Build the lpReserved2 buffer from the spawn actions and resolve the three
+ * standard handles for the child.  On success returns non-zero and fills *st
+ * (the caller frees st->reserved2).  On allocation failure returns 0 with
+ * errno == ENOMEM (st->reserved2 left NULL).  The caller must hold the GVL so
+ * the fd scan is not raced by another thread. */
+static int
+prepare_inherit_state(const struct rb_w32_spawn_actions *actions,
+                      HANDLE hInput, HANDLE hOutput, HANDLE hError,
+                      struct rb_w32_inherit_state *st)
+{
+    memset(st, 0, sizeof(*st));
+
+    /* lpReserved2: the child's CRT reads it back to discover which fds/handles
+     * to inherit.  See make_lpReserved2 for the buffer layout.  NULL with
+     * errno == 0 means "nothing to inherit" (max_fd < 0), not an error. */
+    if (actions) {
+        errno = 0;
+        st->reserved2 = make_lpReserved2(actions, &st->cbReserved2);
+        if (!st->reserved2 && errno == ENOMEM)
+            return 0;
+    }
+
+    /* Derive per-fd handle/osfile views of the buffer (if any) so the standard
+     * handles below and the inheritable handle list can read them back without
+     * a separate snapshot. */
+    st->inherit_count = st->reserved2 ? *(const int *)st->reserved2 : 0;
+    st->p_flags = st->reserved2 ? st->reserved2 + sizeof(int) : NULL;
+    st->p_handle = st->reserved2
+        ? (const intptr_t *)(st->reserved2 + sizeof(int) + st->inherit_count)
+        : NULL;
+
+    /* fd 0/1/2: prefer the table entries (read back from the lpReserved2
+     * buffer), fall back to explicit handles, then to GetStdHandle so the
+     * child's CRT can resolve stdio when the corresponding slot is empty. */
+    st->hStd[0] = hInput ? hInput
+        : (st->reserved2 && st->inherit_count > 0 &&
+           st->p_handle[0] != (intptr_t)INVALID_HANDLE_VALUE &&
+           (st->p_flags[0] & FOPEN))
+          ? (HANDLE)st->p_handle[0] : GetStdHandle(STD_INPUT_HANDLE);
+    st->hStd[1] = hOutput ? hOutput
+        : (st->reserved2 && st->inherit_count > 1 &&
+           st->p_handle[1] != (intptr_t)INVALID_HANDLE_VALUE &&
+           (st->p_flags[1] & FOPEN))
+          ? (HANDLE)st->p_handle[1] : GetStdHandle(STD_OUTPUT_HANDLE);
+    st->hStd[2] = hError ? hError
+        : (st->reserved2 && st->inherit_count > 2 &&
+           st->p_handle[2] != (intptr_t)INVALID_HANDLE_VALUE &&
+           (st->p_flags[2] & FOPEN))
+          ? (HANDLE)st->p_handle[2] : GetStdHandle(STD_ERROR_HANDLE);
+
+    return 1;
+}
+
+/* Populate st->keep / st->forced with the handles that must be inherited by
+ * the child (the lpReserved2 entries plus the standard handles actually handed
+ * to the child) and record which ones had their inherit flag forced on.
+ * Returns non-zero on success, or 0 on allocation failure (errno == ENOMEM;
+ * st->keep/st->forced left NULL).  The list is deduplicated because
+ * UpdateProcThreadAttribute rejects duplicates. */
+static int
+prepare_inheritable_handle_list(struct rb_w32_inherit_state *st)
+{
+    int inherit_count = st->inherit_count;
+    const unsigned char *p_flags = st->p_flags;
+    const intptr_t *p_handle = st->p_handle;
+
+    st->keep = (HANDLE *)malloc((size_t)(inherit_count + 3) * sizeof(HANDLE));
+    st->forced = (HANDLE *)malloc((size_t)(inherit_count + 3) * sizeof(HANDLE));
+    if (!st->keep || !st->forced) {
+        free(st->keep);
+        free(st->forced);
+        st->keep = st->forced = NULL;
+        errno = ENOMEM;
+        return 0;
+    }
+
+    /* Every open buffer entry (FNOINHERIT entries are already stripped by
+     * make_lpReserved2), plus the three standard handles actually handed to
+     * the child (which may come from a GetStdHandle fallback and so are not
+     * necessarily covered by the scan). */
+    for (int i = 0; i < inherit_count; i++) {
+        HANDLE h = (HANDLE)p_handle[i];
+        unsigned char of = p_flags[i];
+        if (h == INVALID_HANDLE_VALUE || !(of & FOPEN))
+            continue;
+        int j;
+        for (j = 0; j < st->keep_count; j++)
+            if (st->keep[j] == h) break;
+        if (j == st->keep_count)
+            st->keep[st->keep_count++] = h;
+    }
+    for (int i = 0; i < 3; i++) {
+        HANDLE h = st->hStd[i];
+        if (h == INVALID_HANDLE_VALUE || h == NULL)
+            continue;
+        int j;
+        for (j = 0; j < st->keep_count; j++)
+            if (st->keep[j] == h) break;
+        if (j == st->keep_count)
+            st->keep[st->keep_count++] = h;
+    }
+
+    /* Each handle passed to PROC_THREAD_ATTRIBUTE_HANDLE_LIST must be
+     * inheritable, or CreateProcessW fails with ERROR_INVALID_PARAMETER.
+     * Turn the flag on where necessary and remember what we changed so it can
+     * be reverted afterwards. */
+    for (int i = 0; i < st->keep_count; i++) {
+        DWORD flags = 0;
+        if (GetHandleInformation(st->keep[i], &flags) &&
+            !(flags & HANDLE_FLAG_INHERIT)) {
+            if (SetHandleInformation(st->keep[i], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT))
+                st->forced[st->forced_count++] = st->keep[i];
+        }
+    }
+    return 1;
+}
+
+/* Build the PROC_THREAD_ATTRIBUTE_LIST restricting inheritance to st->keep and
+ * (when hPseudoConsole is non-NULL) installing a PROC_THREAD_ATTRIBUTE_
+ * PSEUDOCONSOLE attribute for PTY support.  Returns the list (caller frees via
+ * DeleteProcThreadAttributeList + free) or NULL on failure (errno set; st->
+ * keep and st->forced are freed here, and any forced inherit flags are
+ * reverted before they are freed). */
+#ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
+/* Not declared by the SDK when _WIN32_WINNT is below Windows 10; define it so
+ * the future PTY wiring compiles on older targets.  hPseudoConsole is NULL
+ * today, so this branch is never taken yet. */
+#define PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE \
+    ProcThreadAttributeValue(22, FALSE, TRUE, FALSE)
+#endif
+static LPPROC_THREAD_ATTRIBUTE_LIST
+build_attribute_list(struct rb_w32_inherit_state *st, HANDLE hPseudoConsole)
+{
+    DWORD attr_count = 1 + (hPseudoConsole ? 1 : 0);
+    SIZE_T attrsize = 0;
+    LPPROC_THREAD_ATTRIBUTE_LIST attrlist = NULL;
+
+    InitializeProcThreadAttributeList(NULL, attr_count, 0, &attrsize);
+    attrlist = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(attrsize);
+    if (!attrlist) {
+        errno = ENOMEM;
+        goto fail_nomem;
+    }
+    if (!InitializeProcThreadAttributeList(attrlist, attr_count, 0, &attrsize))
+        goto fail_free;
+
+    if (!UpdateProcThreadAttribute(attrlist, 0,
+                                   PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                   st->keep,
+                                   (SIZE_T)st->keep_count * sizeof(HANDLE),
+                                   NULL, NULL))
+        goto fail_free;
+
+    /* Future PTY support: a non-NULL hPseudoConsole wires up the child's
+     * pseudoconsole.  Adding the attribute here keeps CreateChild untouched
+     * when that work lands. */
+    if (hPseudoConsole &&
+        !UpdateProcThreadAttribute(attrlist, 0,
+                                   PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+                                   hPseudoConsole, sizeof(HANDLE),
+                                   NULL, NULL))
+        goto fail_free;
+
+    return attrlist;
+
+  fail_free:
+    errno = map_errno(GetLastError());
+    for (int i = 0; i < st->forced_count; i++)
+        SetHandleInformation(st->forced[i], HANDLE_FLAG_INHERIT, 0);
+    DeleteProcThreadAttributeList(attrlist);
+    free(attrlist);
+  fail_nomem:
+    free(st->keep);
+    free(st->forced);
+    st->keep = st->forced = NULL;
+    return NULL;
+}
 
 static int is_socket(SOCKET);
 static int is_console(SOCKET);

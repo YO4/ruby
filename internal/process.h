@@ -100,6 +100,15 @@ VALUE rb_execarg_extract_options(VALUE execarg_obj, VALUE opthash);
 void rb_execarg_setenv(VALUE execarg_obj, VALUE env);
 RUBY_SYMBOL_EXPORT_END
 
+#if defined(_WIN32)
+/* process.c (Windows only): build the opaque redirection requests consumed by
+ * win32.c to construct the lpReserved2 inherit table.  Used by both process.c
+ * and io.c (pipe_open).  The struct is opaque (defined in win32.c); only a
+ * forward declaration is needed here to keep this header portable. */
+struct rb_w32_spawn_actions;
+struct rb_w32_spawn_actions *rb_w32_build_spawn_actions(const struct rb_execarg *eargp);
+#endif
+
 /* argv_str contains extra two elements.
  * The beginning one is for /bin/sh used by exec_with_sh.
  * The last one for terminating NULL used by execve.

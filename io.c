@@ -276,6 +276,27 @@ rb_update_max_fd(int fd)
 void
 rb_maygvl_fd_fix_cloexec(int fd)
 {
+#ifdef _WIN32
+    /* Use the dedicated rb_w32_set_cloexec helper instead of the fcntl
+     * path below, so that both the OS-level HANDLE_FLAG_INHERIT bit and
+     * the CRT _osfile FNOINHERIT bit are kept in sync.  The standard
+     * handles (0, 1, 2) stay inheritable, while every other fd is made
+     * non-inheritable (close-on-exec) by default.  This matches the
+     * assumption elsewhere (notably the lpReserved2 fd-inheritance
+     * machinery) that a fd is inherited by a child only when
+     * close_on_exec was explicitly cleared. */
+    if (fd <= 2) {
+        if (rb_w32_set_cloexec(fd, FALSE) != 0)
+            rb_bug("rb_maygvl_fd_fix_cloexec: rb_w32_set_cloexec(%d, FALSE) failed: %s",
+                   fd, strerror(errno));
+    }
+    else {
+        if (rb_w32_set_cloexec(fd, TRUE) != 0)
+            rb_bug("rb_maygvl_fd_fix_cloexec: rb_w32_set_cloexec(%d, TRUE) failed: %s",
+                   fd, strerror(errno));
+    }
+    return;
+#endif
   /* MinGW don't have F_GETFD and FD_CLOEXEC.  [ruby-core:40281] */
 #if defined(HAVE_FCNTL) && defined(F_GETFD) && defined(F_SETFD) && defined(FD_CLOEXEC)
     int flags, flags2, ret;
@@ -301,6 +322,13 @@ rb_fd_fix_cloexec(int fd)
 {
     rb_maygvl_fd_fix_cloexec(fd);
     rb_update_max_fd(fd);
+}
+
+/* License: Ruby's */
+int
+rb_get_max_fd(void)
+{
+    return (int)max_file_descriptor;
 }
 
 /* this is only called once */
@@ -7705,6 +7733,21 @@ pipe_open(VALUE execarg_obj, const char *modestr, enum rb_io_mode fmode,
 #   if defined(HAVE_SPAWNVE)
         if (eargp->envp_str) envp = (char **)RSTRING_PTR(eargp->envp_str);
 #   endif
+#   if defined(_WIN32)
+        /* On Windows, spawn through the inherit-table path so that
+         * close_on_exec = false fds (and any explicit fd_dup2 redirects
+         * set up above) propagate to the child via lpReserved2. */
+        struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
+        if (args) {
+            pid = rb_w32_uaspawn_inherit(P_NOWAIT,
+                                         cmd, args, 0, CP_UTF8, actions);
+        }
+        else {
+            pid = rb_w32_uspawn_inherit(P_NOWAIT, cmd, NULL,
+                                        CP_UTF8, actions);
+        }
+        rb_w32_spawn_actions_destroy(actions);
+#   else
         while ((pid = DO_SPAWN(cmd, args, envp)) < 0) {
             /* exec failed */
             switch (e = errno) {
@@ -7717,6 +7760,7 @@ pipe_open(VALUE execarg_obj, const char *modestr, enum rb_io_mode fmode,
             }
             break;
         }
+#   endif
         if (eargp)
             rb_execarg_run_options(sargp, NULL, NULL, 0);
 # endif
@@ -7738,9 +7782,7 @@ pipe_open(VALUE execarg_obj, const char *modestr, enum rb_io_mode fmode,
 
     /* parent */
     if (pid < 0) {
-# if defined(HAVE_WORKING_FORK)
         e = errno;
-# endif
         close(arg.pair[0]);
         close(arg.pair[1]);
         if ((fmode & (FMODE_READABLE|FMODE_WRITABLE)) == (FMODE_READABLE|FMODE_WRITABLE)) {

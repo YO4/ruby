@@ -1619,7 +1619,8 @@ exec_with_sh(const char *prog, char **argv, char **envp)
 
 /* This function should be async-signal-safe.  Actually it is. */
 static int
-proc_exec_cmd(const char *prog, VALUE argv_str, VALUE envp_str)
+proc_exec_cmd(const char *prog, VALUE argv_str, VALUE envp_str,
+              const struct rb_execarg *eargp)
 {
     char **argv;
 #ifndef _WIN32
@@ -1634,7 +1635,14 @@ proc_exec_cmd(const char *prog, VALUE argv_str, VALUE envp_str)
     }
 
 #ifdef _WIN32
-    rb_w32_uaspawn(P_OVERLAY, prog, argv);
+    if (eargp) {
+        struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
+        rb_w32_uaspawn_inherit(P_OVERLAY, prog, argv, 0, CP_UTF8, actions);
+        rb_w32_spawn_actions_destroy(actions);
+    }
+    else {
+        rb_w32_uaspawn(P_OVERLAY, prog, argv);
+    }
     return errno;
 #else
     envp = envp_str ? RB_IMEMO_TMPBUF_PTR(envp_str) : NULL;
@@ -1650,7 +1658,8 @@ proc_exec_cmd(const char *prog, VALUE argv_str, VALUE envp_str)
 
 /* This function should be async-signal-safe.  Actually it is. */
 static int
-proc_exec_sh(const char *str, VALUE envp_str)
+proc_exec_sh(const char *str, VALUE envp_str,
+             const struct rb_execarg *eargp)
 {
     const char *s;
 
@@ -1663,7 +1672,14 @@ proc_exec_sh(const char *str, VALUE envp_str)
     }
 
 #ifdef _WIN32
-    rb_w32_uspawn(P_OVERLAY, (char *)str, 0);
+    if (eargp) {
+        struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
+        rb_w32_uspawn_inherit(P_OVERLAY, (char *)str, 0, CP_UTF8, actions);
+        rb_w32_spawn_actions_destroy(actions);
+    }
+    else {
+        rb_w32_uspawn(P_OVERLAY, (char *)str, 0);
+    }
 #else
     if (envp_str)
         execle("/bin/sh", "sh", "-c", str, (char *)NULL, RB_IMEMO_TMPBUF_PTR(envp_str)); /* async-signal-safe */
@@ -1678,7 +1694,7 @@ rb_proc_exec(const char *str)
 {
     int ret;
     before_exec();
-    ret = proc_exec_sh(str, Qfalse);
+    ret = proc_exec_sh(str, Qfalse, NULL);
     after_exec();
     errno = ret;
     return -1;
@@ -1789,7 +1805,11 @@ proc_spawn_cmd(char **argv, VALUE prog, struct rb_execarg *eargp)
         if (eargp->new_pgroup_given && eargp->new_pgroup_flag) {
             flags = CREATE_NEW_PROCESS_GROUP;
         }
-        pid = rb_w32_uaspawn_flags(P_NOWAIT, prog ? RSTRING_PTR(prog) : 0, argv, flags);
+        struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
+        pid = rb_w32_uaspawn_inherit(P_NOWAIT,
+                                     prog ? RSTRING_PTR(prog) : 0, argv,
+                                     flags, CP_UTF8, actions);
+        rb_w32_spawn_actions_destroy(actions);
 #else
         pid = proc_spawn_cmd_internal(argv, prog ? RSTRING_PTR(prog) : 0);
 #endif
@@ -1798,13 +1818,22 @@ proc_spawn_cmd(char **argv, VALUE prog, struct rb_execarg *eargp)
 }
 
 #if defined(_WIN32)
-#define proc_spawn_sh(str) rb_w32_uspawn(P_NOWAIT, (str), 0)
+static rb_pid_t
+proc_spawn_sh(char *str, struct rb_execarg *eargp)
+{
+    struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
+    rb_pid_t pid;
+    pid = rb_w32_uspawn_inherit(P_NOWAIT, (str), 0, CP_UTF8, actions);
+    rb_w32_spawn_actions_destroy(actions);
+    return pid;
+}
 #else
 static rb_pid_t
-proc_spawn_sh(char *str)
+proc_spawn_sh(char *str, struct rb_execarg *eargp)
 {
     char fbuf[MAXPATHLEN];
     rb_pid_t status;
+    (void)eargp;
 
     char *shell = dln_find_exe_r("sh", 0, fbuf, sizeof(fbuf));
     before_exec();
@@ -1854,11 +1883,6 @@ check_exec_redirect_fd(VALUE v, int iskey)
     if (fd < 0) {
         rb_raise(rb_eArgError, "negative file descriptor");
     }
-#ifdef _WIN32
-    else if (fd >= 3 && iskey) {
-        rb_raise(rb_eArgError, "wrong file descriptor (%d)", fd);
-    }
-#endif
     return INT2FIX(fd);
 
   wrong:
@@ -2279,6 +2303,53 @@ check_exec_fds(struct rb_execarg *eargp)
     eargp->close_others_maxhint = maxhint;
     return h;
 }
+
+#if defined(_WIN32)
+/*
+ * Build the opaque redirection requests consumed by win32.c to construct the
+ * lpReserved2 inherit table.  This only translates the rb_execarg redirection
+ * description (fd_close / fd_dup2 / fd_dup2_child) into the builder API; it
+ * never touches the CRT-internal fd details, which live entirely inside
+ * win32.c.  fd_open is expanded into fd_dup2 earlier (rb_execarg_parent_start1),
+ * so no extra handling is required here.  The returned object must be released
+ * with rb_w32_spawn_actions_destroy.
+ */
+struct rb_w32_spawn_actions *
+rb_w32_build_spawn_actions(const struct rb_execarg *eargp)
+{
+    struct rb_w32_spawn_actions *actions = rb_w32_spawn_actions_init();
+
+    VALUE ary = eargp->fd_close;
+    if (ary != Qfalse) {
+        long n = RARRAY_LEN(ary), i;
+        for (i = 0; i < n; i++)
+            rb_w32_spawn_actions_addclose(actions,
+                FIX2INT(RARRAY_AREF(RARRAY_AREF(ary, i), 0)));
+    }
+
+    ary = eargp->fd_dup2;
+    if (ary != Qfalse) {
+        long n = RARRAY_LEN(ary), i;
+        for (i = 0; i < n; i++) {
+            VALUE elt = RARRAY_AREF(ary, i);
+            rb_w32_spawn_actions_adddup2(actions,
+                FIX2INT(RARRAY_AREF(elt, 1)), FIX2INT(RARRAY_AREF(elt, 0)));
+        }
+    }
+
+    ary = eargp->fd_dup2_child;
+    if (ary != Qfalse) {
+        long n = RARRAY_LEN(ary), i;
+        for (i = 0; i < n; i++) {
+            VALUE elt = RARRAY_AREF(ary, i);
+            rb_w32_spawn_actions_adddup2_child(actions,
+                FIX2INT(RARRAY_AREF(elt, 1)), FIX2INT(RARRAY_AREF(elt, 0)));
+        }
+    }
+
+    return actions;
+}
+#endif /* _WIN32 */
 
 static void
 rb_check_exec_options(VALUE opthash, VALUE execarg_obj)
@@ -2767,10 +2838,12 @@ rb_execarg_parent_start1(VALUE execarg_obj)
 
     eargp->redirect_fds = check_exec_fds(eargp);
 
+#ifndef _WIN32
     ary = eargp->fd_dup2;
     if (ary != Qfalse) {
         rb_execarg_allocate_dup2_tmpbuf(eargp, RARRAY_LEN(ary));
     }
+#endif
 
     unsetenv_others = eargp->unsetenv_others_given && eargp->unsetenv_others_do;
     envopts = eargp->env_modification;
@@ -3046,8 +3119,21 @@ save_redirect_fd(int fd, struct rb_execarg *sargp, char *errmsg, size_t errmsg_b
         VALUE newary, redirection;
         int save_fd = redirect_cloexec_dup(fd), cloexec;
         if (save_fd == -1) {
-            if (errno == EBADF)
+            if (errno == EBADF) {
+                /*
+                 * The target FD was not open in the parent.  run_exec_dup2
+                 * still dups into fd in the parent (on platforms without
+                 * fork), so remember to close fd during the restore step to
+                 * avoid leaking the handle.
+                 */
+                newary = sargp->fd_close;
+                if (newary == Qfalse) {
+                    newary = hide_obj(rb_ary_new());
+                    sargp->fd_close = newary;
+                }
+                rb_ary_push(newary, hide_obj(rb_assoc_new(INT2FIX(fd), Qnil)));
                 return 0;
+            }
             ERRMSG("dup");
             return -1;
         }
@@ -3494,11 +3580,13 @@ rb_execarg_run_options(const struct rb_execarg *eargp, struct rb_execarg *sargp,
         }
     }
 
+#ifndef _WIN32
     obj = eargp->fd_dup2;
     if (obj != Qfalse) {
         if (run_exec_dup2(obj, eargp->dup2_tmpbuf, sargp, errmsg, errmsg_buflen) == -1) /* hopefully async-signal-safe */
             return -1;
     }
+#endif
 
     obj = eargp->fd_close;
     if (obj != Qfalse) {
@@ -3516,11 +3604,13 @@ rb_execarg_run_options(const struct rb_execarg *eargp, struct rb_execarg *sargp,
     }
 #endif
 
+#if defined(HAVE_WORKING_FORK)
     obj = eargp->fd_dup2_child;
     if (obj != Qfalse) {
         if (run_exec_dup2_child(obj, sargp, errmsg, errmsg_buflen) == -1) /* async-signal-safe */
             return -1;
     }
+#endif
 
     if (eargp->chdir_given) {
         if (sargp) {
@@ -3550,12 +3640,14 @@ rb_execarg_run_options(const struct rb_execarg *eargp, struct rb_execarg *sargp,
     }
 #endif
 
+#ifndef _WIN32
     if (sargp) {
         VALUE ary = sargp->fd_dup2;
         if (ary != Qfalse) {
             rb_execarg_allocate_dup2_tmpbuf(sargp, RARRAY_LEN(ary));
         }
     }
+#endif
     {
         int preserve = errno;
         stdfd_clear_nonblock();
@@ -3588,13 +3680,13 @@ exec_async_signal_safe(const struct rb_execarg *eargp, char *errmsg, size_t errm
     }
 
     if (eargp->use_shell) {
-        err = proc_exec_sh(RSTRING_PTR(eargp->invoke.sh.shell_script), eargp->envp_str); /* async-signal-safe */
+        err = proc_exec_sh(RSTRING_PTR(eargp->invoke.sh.shell_script), eargp->envp_str, eargp); /* async-signal-safe */
     }
     else {
         char *abspath = NULL;
         if (!NIL_P(eargp->invoke.cmd.command_abspath))
             abspath = RSTRING_PTR(eargp->invoke.cmd.command_abspath);
-        err = proc_exec_cmd(abspath, eargp->invoke.cmd.argv_str, eargp->envp_str); /* async-signal-safe */
+        err = proc_exec_cmd(abspath, eargp->invoke.cmd.argv_str, eargp->envp_str, eargp); /* async-signal-safe */
     }
 #if !defined(HAVE_WORKING_FORK)
     rb_execarg_run_options(sargp, NULL, errmsg, errmsg_buflen);
@@ -4533,7 +4625,7 @@ rb_spawn_process(struct rb_execarg *eargp, char *errmsg, size_t errmsg_buflen)
     }
 # if defined HAVE_SPAWNV
     if (eargp->use_shell) {
-        pid = proc_spawn_sh(RSTRING_PTR(prog));
+        pid = proc_spawn_sh(RSTRING_PTR(prog), eargp);
     }
     else {
         char **argv = ARGVSTR2ARGV(eargp->invoke.cmd.argv_str);

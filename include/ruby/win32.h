@@ -323,11 +323,46 @@ extern rb_pid_t wait(int *);
 extern rb_pid_t rb_w32_uspawn(int, const char *, const char*);
 extern rb_pid_t rb_w32_uaspawn(int, const char *, char *const *);
 extern rb_pid_t rb_w32_uaspawn_flags(int, const char *, char *const *, DWORD);
+
+/* Opaque builder for the Windows child-process redirection requests.
+ *
+ * On Windows, the C runtime propagates a list of inheritable file handles to
+ * a spawned child through the reserved STARTUPINFOW fields lpReserved2 /
+ * cbReserved2.  The concrete snapshot is built inside win32.c from the
+ * close_on_exec state of every open descriptor; callers describe the
+ * redirections only through the accessors below and pass the resulting
+ * pointer to the spawn functions, so they never see the CRT-internal fd
+ * details.  The struct layout is private to win32.c. */
+struct rb_w32_spawn_actions;
+extern struct rb_w32_spawn_actions *rb_w32_spawn_actions_init(void);
+extern void rb_w32_spawn_actions_destroy(struct rb_w32_spawn_actions *actions);
+extern void rb_w32_spawn_actions_addclose(struct rb_w32_spawn_actions *actions, int fd);
+extern void rb_w32_spawn_actions_adddup2(struct rb_w32_spawn_actions *actions,
+                                         int oldfd, int newfd);
+extern void rb_w32_spawn_actions_adddup2_child(struct rb_w32_spawn_actions *actions,
+                                               int oldfd, int newfd);
+
+extern rb_pid_t rb_w32_uaspawn_inherit(int mode, const char *prog, char *const *argv,
+                                       DWORD flags, UINT cp,
+                                       const struct rb_w32_spawn_actions *actions);
+extern rb_pid_t rb_w32_uspawn_inherit(int mode, const char *cmd, const char *prog,
+                                      UINT cp,
+                                      const struct rb_w32_spawn_actions *actions);
 #undef HAVE_KILL
 #define HAVE_KILL 1
 extern int kill(rb_pid_t, int);
 extern int fcntl(int, int, ...);
 extern int rb_w32_set_nonblock(int);
+/* Accessor for the CRT internal _osfile array so that the inherit
+ * table builder in process.c can read the FNOINHERIT bit set by
+ * fcntl(F_SETFD, FD_CLOEXEC). */
+extern unsigned char rb_w32_get_osfile(int);
+/* Mirror of fcntl(fd, F_SETFD, FD_CLOEXEC / cleared) on Windows.
+ * Sets both the OS HANDLE_FLAG_INHERIT bit and the CRT _osfile
+ * FNOINHERIT bit so non-standard fds are not inherited by child
+ * processes unless explicitly requested.  Returns 0 on success, -1
+ * (with errno set) if SetHandleInformation fails. */
+extern int rb_w32_set_cloexec(int fd, int cloexec);
 extern rb_pid_t rb_w32_getpid(void);
 extern rb_pid_t rb_w32_getppid(void);
 extern int rb_w32_isatty(int);
