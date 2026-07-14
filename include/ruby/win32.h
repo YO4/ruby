@@ -340,7 +340,9 @@ extern void rb_w32_spawn_actions_addclose(struct rb_w32_spawn_actions *actions, 
 extern void rb_w32_spawn_actions_adddup2(struct rb_w32_spawn_actions *actions,
                                          int oldfd, int newfd);
 extern void rb_w32_spawn_actions_adddup2_child(struct rb_w32_spawn_actions *actions,
-                                               int oldfd, int newfd);
+                                                int oldfd, int newfd);
+extern void rb_w32_spawn_actions_set_close_others(struct rb_w32_spawn_actions *actions,
+                                                  int close_others_do);
 
 extern rb_pid_t rb_w32_uaspawn_inherit(int mode, const char *prog, char *const *argv,
                                        DWORD flags, UINT cp,

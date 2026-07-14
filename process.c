@@ -2319,6 +2319,11 @@ rb_w32_build_spawn_actions(const struct rb_execarg *eargp)
 {
     struct rb_w32_spawn_actions *actions = rb_w32_spawn_actions_init();
 
+    /* close_others_do governs whether fds >= 3 that are not explicit redirect
+     * targets are stripped from the lpReserved2 inherit table, matching the
+     * Unix rb_close_before_exec(3, ...) step in rb_execarg_run_options. */
+    rb_w32_spawn_actions_set_close_others(actions, eargp->close_others_do);
+
     VALUE ary = eargp->fd_close;
     if (ary != Qfalse) {
         long n = RARRAY_LEN(ary), i;

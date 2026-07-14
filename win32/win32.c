@@ -2794,6 +2794,7 @@ struct rb_w32_fd_pair {
 
 struct rb_w32_spawn_actions {
     int close_others_maxhint;
+    int close_others_do;
     int fd_close_count;
     int fd_close_cap;
     int *fd_close;
@@ -2876,11 +2877,23 @@ rb_w32_spawn_actions_adddup2(struct rb_w32_spawn_actions *actions,
 
 void
 rb_w32_spawn_actions_adddup2_child(struct rb_w32_spawn_actions *actions,
-                                   int oldfd, int newfd)
+                                    int oldfd, int newfd)
 {
     spawn_actions_add_pair(actions, &actions->fd_dup2_child,
                            &actions->fd_dup2_child_count, &actions->fd_dup2_child_cap,
                            oldfd, newfd);
+}
+
+/* Record whether the :close_others => true option was given for this spawn.
+ * When set, make_lpReserved2 drops every fd >= 3 that is not an explicit
+ * redirect target, matching Unix's rb_close_before_exec(3, ...).  Default is
+ * 0 (matches Unix's current default, which leaves close_on_exec = false fds
+ * inheritable). */
+void
+rb_w32_spawn_actions_set_close_others(struct rb_w32_spawn_actions *actions,
+                                      int close_others_do)
+{
+    actions->close_others_do = close_others_do ? 1 : 0;
 }
 
 /*
@@ -2948,7 +2961,7 @@ make_lpReserved2(const struct rb_w32_spawn_actions *actions,
      * INVALID_HANDLE_VALUE from the initialization above and are ignored by
      * later steps.  The FNOINHERIT flag is preserved here and stripped in
      * Step 4: every fd that is not explicitly redirected (redirect targets
-     * have FNOINHERIT cleared in Step 3) is therefore dropped from the child,
+     * have FNOINHERIT cleared in Step 2) is therefore dropped from the child,
      * matching Unix's close_on_exec semantics without special-casing the
      * flag during the spawn. */
     for (int fd = 0; fd < count; fd++) {
@@ -2962,38 +2975,62 @@ make_lpReserved2(const struct rb_w32_spawn_actions *actions,
         p_flags[fd] = of;
     }
 
-    /* Step 2: fd_close removes the matching entries.  The parent's fd is NOT
-     * closed (unlike the Unix path where exec inherits and then closes); the
-     * child simply will not see it. */
-    for (int i = 0; i < actions->fd_close_count; i++) {
-        int cfd = actions->fd_close[i];
-        if (cfd >= 0 && cfd < count) {
-            p_handle[cfd] = (intptr_t)INVALID_HANDLE_VALUE;
-            p_flags[cfd] = 0;
-        }
-    }
-
-    /* Step 3: fd_dup2 describes redirections [oldfd, newfd].  Copy the source
+    /* Step 2: fd_dup2 describes redirections [oldfd, newfd].  Copy the source
      * (handle, osfile) into the new position.  No dup() is required: the
      * child's CRT will receive fd newfd backed by the same HANDLE as oldfd.
      * Because Step 1 already registered every open fd (including
      * close_on_exec ones), the source is always present, so the parent's own
      * file descriptors are never consulted here.  FNOINHERIT is cleared on the
      * target so the redirect is inherited by the child regardless of the
-     * source's close_on_exec state. */
-    for (int i = 0; i < actions->fd_dup2_count; i++) {
-        int oldfd = actions->fd_dup2[i].oldfd;
-        int newfd = actions->fd_dup2[i].newfd;
+     * source's close_on_exec state.
+     *
+     * The scan is a fixpoint loop (like the fd_dup2_child block below): a
+     * redirect whose oldfd is itself the newfd of a later entry (e.g.
+     * spawn(cmd, 1=>3, 3=>somefile)) must wait for that later entry to
+     * populate p_handle[oldfd] before it can resolve.  Repeating until no
+     * entry changes the table matches Unix's run_exec_dup2, which sorts the
+     * pairs by oldfd and uses older_index/num_newer to apply the same
+     * dependency order. */
+    {
+        int changed;
+        do {
+            changed = 0;
+            for (int i = 0; i < actions->fd_dup2_count; i++) {
+                int oldfd = actions->fd_dup2[i].oldfd;
+                int newfd = actions->fd_dup2[i].newfd;
 
-        if (oldfd < 0 || oldfd >= count ||
-            p_handle[oldfd] == (intptr_t)INVALID_HANDLE_VALUE ||
-            !(p_flags[oldfd] & FOPEN))
-            continue;
-        if (newfd < 0 || newfd >= count)
-            continue;
+                if (oldfd < 0 || oldfd >= count ||
+                    p_handle[oldfd] == (intptr_t)INVALID_HANDLE_VALUE ||
+                    !(p_flags[oldfd] & FOPEN))
+                    continue;
+                if (newfd < 0 || newfd >= count)
+                    continue;
 
-        p_handle[newfd] = p_handle[oldfd];
-        p_flags[newfd] = p_flags[oldfd] & ~FNOINHERIT;
+                unsigned char of = p_flags[oldfd] & ~FNOINHERIT;
+                if (p_handle[newfd] == p_handle[oldfd] && p_flags[newfd] == of)
+                    continue;
+
+                p_handle[newfd] = p_handle[oldfd];
+                p_flags[newfd] = of;
+                changed = 1;
+            }
+        } while (changed);
+    }
+
+    /* Step 3: fd_close removes the matching entries.  The parent's fd is NOT
+     * closed (unlike the Unix path where exec inherits and then closes); the
+     * child simply will not see it.  This runs *after* fd_dup2 so that
+     * `dup2(oldfd, newfd)` followed by `close(newfd)` matches Unix's
+     * rb_execarg_run_options order (fd_dup2, then fd_close): the redirect
+     * target is observed before the close zeroes the slot.  E.g. with
+     * `spawn(cmd, 1=>3, 3=>:close)` the child keeps fd 1 = parent's fd 3 and
+     * drops fd 3, as on Unix. */
+    for (int i = 0; i < actions->fd_close_count; i++) {
+        int cfd = actions->fd_close[i];
+        if (cfd >= 0 && cfd < count) {
+            p_handle[cfd] = (intptr_t)INVALID_HANDLE_VALUE;
+            p_flags[cfd] = 0;
+        }
     }
 
     /* fd_dup2_child entries are "self dups" resolved within the child: the
@@ -3040,20 +3077,57 @@ make_lpReserved2(const struct rb_w32_spawn_actions *actions,
         } while (changed);
     }
 
-    /* Step 4: strip every fd that is still marked FNOINHERIT.  These are the
-     * close_on_exec fds that were not explicitly redirected (redirect targets
-     * had FNOINHERIT cleared in Step 3), so the child must not see them.  This
-     * is the inverse of the old Step 1 exclusion: the buffer is left free of
-     * FNOINHERIT entries, so the spawn path no longer needs to special-case
-     * the flag. */
+    /* Step 4: strip entries the child must not see.
+     *
+     *   - When close_others_do is set, every fd >= 3 that is not an explicit
+     *     redirect target (a newfd of fd_dup2 or fd_dup2_child) is dropped,
+     *     matching Unix's `rb_close_before_exec(3, maxhint, redirect_fds)`.
+     *     fds 0/1/2 are always kept so the child's CRT can resolve stdio.
+     *     This closes the gap where a close_on_exec = false fd was previously
+     *     inherited regardless of the :close_others option on Windows.
+     *
+     *   - Any entry still marked FNOINHERIT (close_on_exec) is stripped
+     *     regardless of close_others: the parent marked it close-on-exec, so
+     *     the child must not inherit it.  Redirect targets had FNOINHERIT
+     *     cleared in Step 2, so this never clobbers an explicit redirect. */
+    unsigned char *keep_fd = NULL;
+    if (actions->close_others_do) {
+        keep_fd = (unsigned char *)calloc((size_t)count, 1);
+        if (!keep_fd) {
+            free(reserved2);
+            errno = ENOMEM;
+            return NULL;
+        }
+        if (count > 0) keep_fd[0] = 1;
+        if (count > 1) keep_fd[1] = 1;
+        if (count > 2) keep_fd[2] = 1;
+        for (int i = 0; i < actions->fd_dup2_count; i++) {
+            int newfd = actions->fd_dup2[i].newfd;
+            if (newfd >= 0 && newfd < count)
+                keep_fd[newfd] = 1;
+        }
+        for (int i = 0; i < actions->fd_dup2_child_count; i++) {
+            int newfd = actions->fd_dup2_child[i].newfd;
+            if (newfd >= 0 && newfd < count)
+                keep_fd[newfd] = 1;
+        }
+    }
+
     for (int fd = 0; fd < count; fd++) {
         if (p_handle[fd] == (intptr_t)INVALID_HANDLE_VALUE)
             continue;
+        if (keep_fd && fd >= 3 && !keep_fd[fd]) {
+            p_handle[fd] = (intptr_t)INVALID_HANDLE_VALUE;
+            p_flags[fd] = 0;
+            continue;
+        }
         if (p_flags[fd] & FNOINHERIT) {
             p_handle[fd] = (intptr_t)INVALID_HANDLE_VALUE;
             p_flags[fd] = 0;
         }
     }
+
+    free(keep_fd);
 
     *cbReserved2_out = (WORD)total_size;
     return reserved2;
@@ -3227,11 +3301,18 @@ build_attribute_list(struct rb_w32_inherit_state *st, HANDLE hPseudoConsole)
 
   fail_free:
     errno = map_errno(GetLastError());
-    for (int i = 0; i < st->forced_count; i++)
-        SetHandleInformation(st->forced[i], HANDLE_FLAG_INHERIT, 0);
     DeleteProcThreadAttributeList(attrlist);
     free(attrlist);
+    /* fall through to fail_nomem */
   fail_nomem:
+    /* Revert the inherit flag on handles we forced inheritable in
+     * prepare_inheritable_handle_list.  Both the fail_free path (after a
+     * CreateProcThreadAttributeList/UpdateProcThreadAttribute failure) and
+     * the malloc(attrlist) failure (which skips fail_free) reach here, so the
+     * revert must run from fail_nomem or the handles would stay inheritable
+     * for the rest of the process and leak into every subsequent spawn. */
+    for (int i = 0; i < st->forced_count; i++)
+        SetHandleInformation(st->forced[i], HANDLE_FLAG_INHERIT, 0);
     free(st->keep);
     free(st->forced);
     st->keep = st->forced = NULL;
