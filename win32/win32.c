@@ -1210,12 +1210,15 @@ struct rb_w32_inherit_state {
     HANDLE hStd[3];             /* input, output, error */
 
     /* PROC_THREAD_ATTRIBUTE_HANDLE_LIST scratch (owned by this struct, freed
-     * by the caller).  forced[] records handles whose inherit flag we toggled
-     * on so they can be reverted after CreateProcessW. */
+     * by the caller). */
     HANDLE *keep;
-    HANDLE *forced;
     int keep_count;
-    int forced_count;
+
+    /* Duplicated inheritable handles created so non-inheritable redirect
+     * targets can be listed in PROC_THREAD_ATTRIBUTE_HANDLE_LIST.  Owned by
+     * this struct; the caller closes and frees them after CreateProcessW. */
+    HANDLE *duped;
+    int duped_count;
 };
 
 /* Forward declarations: the inherit-state helpers are defined later, right
@@ -1296,6 +1299,9 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
 
     if (st.reserved2) {
         if (!prepare_inheritable_handle_list(&st)) {
+            for (int i = 0; i < st.duped_count; i++)
+                CloseHandle(st.duped[i]);
+            free(st.duped);
             free(st.reserved2);
             child->pid = 0;
             return FALSE;       /* errno == ENOMEM */
@@ -1307,6 +1313,9 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
         else {
             attrlist = build_attribute_list(&st, NULL);
             if (!attrlist) {
+                for (int i = 0; i < st.duped_count; i++)
+                    CloseHandle(st.duped[i]);
+                free(st.duped);
                 free(st.reserved2);
                 child->pid = 0;
                 return FALSE;   /* errno set by build_attribute_list */
@@ -1331,18 +1340,14 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
             errno = map_errno(GetLastError());
     }
 
-    /* Revert the inherit flag on the handles we forced inheritable. */
-    if (st.forced) {
-        for (int i = 0; i < st.forced_count; i++)
-            SetHandleInformation(st.forced[i], HANDLE_FLAG_INHERIT, 0);
-    }
-
     if (attrlist) {
         DeleteProcThreadAttributeList(attrlist);
         free(attrlist);
     }
     free(st.keep);
-    free(st.forced);
+    for (int i = 0; i < st.duped_count; i++)
+        CloseHandle(st.duped[i]);
+    free(st.duped);
     free(st.reserved2);
 
     if (!fRet) {
@@ -3165,6 +3170,50 @@ prepare_inherit_state(const struct rb_w32_spawn_actions *actions,
         ? (const intptr_t *)(st->reserved2 + sizeof(int) + st->inherit_count)
         : NULL;
 
+    /* Ensure every handle the child will inherit is OS-inheritable.  Redirect
+     * targets (pipe ends from rb_w32_pipe, close_on_exec fds) are not, and
+     * PROC_THREAD_ATTRIBUTE_HANDLE_LIST requires inheritable handles or
+     * CreateProcessW fails with ERROR_INVALID_PARAMETER.  Rather than toggle
+     * the original handle's HANDLE_FLAG_INHERIT (which would race against other
+     * spawning threads), duplicate each non-inheritable handle with
+     * bInheritHandle=TRUE and overwrite the buffer copy so the child's CRT
+     * (lpReserved2) and the handle list see the same duplicate value.  The
+     * duplicates are recorded in st->duped and closed by the caller after
+     * CreateProcessW; the original fds stay non-inheritable in the parent. */
+    if (st->reserved2) {
+        intptr_t *ph = (intptr_t *)(st->reserved2 + sizeof(int) + st->inherit_count);
+        st->duped = (HANDLE *)malloc((size_t)(st->inherit_count + 3) * sizeof(HANDLE));
+        if (!st->duped) {
+            errno = ENOMEM;
+            return 0;
+        }
+        for (int fd = 0; fd < st->inherit_count; fd++) {
+            intptr_t v = ph[fd];
+            HANDLE h = (HANDLE)v;
+            DWORD flags = 0;
+            if (v == (intptr_t)INVALID_HANDLE_VALUE || !(st->p_flags[fd] & FOPEN))
+                continue;
+            if (GetHandleInformation(h, &flags) && (flags & HANDLE_FLAG_INHERIT))
+                continue;   /* already inheritable */
+            HANDLE dup = NULL;
+            if (!DuplicateHandle(GetCurrentProcess(), h, GetCurrentProcess(),
+                                 &dup, 0, TRUE, DUPLICATE_SAME_ACCESS)) {
+                for (int i = 0; i < st->duped_count; i++)
+                    CloseHandle(st->duped[i]);
+                free(st->duped);
+                st->duped = NULL;
+                st->duped_count = 0;
+                errno = map_errno(GetLastError());
+                if (errno == 0)
+                    errno = EINVAL;
+                return 0;
+            }
+            ph[fd] = (intptr_t)dup;
+            st->duped[st->duped_count++] = dup;
+        }
+        st->p_handle = ph;   /* reflect duplicates to later readers */
+    }
+
     /* fd 0/1/2: prefer the table entries (read back from the lpReserved2
      * buffer), fall back to explicit handles, then to GetStdHandle so the
      * child's CRT can resolve stdio when the corresponding slot is empty. */
@@ -3187,11 +3236,10 @@ prepare_inherit_state(const struct rb_w32_spawn_actions *actions,
     return 1;
 }
 
-/* Populate st->keep / st->forced with the handles that must be inherited by
- * the child (the lpReserved2 entries plus the standard handles actually handed
- * to the child) and record which ones had their inherit flag forced on.
+/* Populate st->keep with the handles that must be inherited by the child (the
+ * lpReserved2 entries plus the standard handles actually handed to the child).
  * Returns non-zero on success, or 0 on allocation failure (errno == ENOMEM;
- * st->keep/st->forced left NULL).  The list is deduplicated because
+ * st->keep left NULL).  The list is deduplicated because
  * UpdateProcThreadAttribute rejects duplicates. */
 static int
 prepare_inheritable_handle_list(struct rb_w32_inherit_state *st)
@@ -3201,11 +3249,7 @@ prepare_inheritable_handle_list(struct rb_w32_inherit_state *st)
     const intptr_t *p_handle = st->p_handle;
 
     st->keep = (HANDLE *)malloc((size_t)(inherit_count + 3) * sizeof(HANDLE));
-    st->forced = (HANDLE *)malloc((size_t)(inherit_count + 3) * sizeof(HANDLE));
-    if (!st->keep || !st->forced) {
-        free(st->keep);
-        free(st->forced);
-        st->keep = st->forced = NULL;
+    if (!st->keep) {
         errno = ENOMEM;
         return 0;
     }
@@ -3236,18 +3280,12 @@ prepare_inheritable_handle_list(struct rb_w32_inherit_state *st)
             st->keep[st->keep_count++] = h;
     }
 
-    /* Each handle passed to PROC_THREAD_ATTRIBUTE_HANDLE_LIST must be
-     * inheritable, or CreateProcessW fails with ERROR_INVALID_PARAMETER.
-     * Turn the flag on where necessary and remember what we changed so it can
-     * be reverted afterwards. */
-    for (int i = 0; i < st->keep_count; i++) {
-        DWORD flags = 0;
-        if (GetHandleInformation(st->keep[i], &flags) &&
-            !(flags & HANDLE_FLAG_INHERIT)) {
-            if (SetHandleInformation(st->keep[i], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT))
-                st->forced[st->forced_count++] = st->keep[i];
-        }
-    }
+    /* Every handle in st->keep is, by construction, already inheritable:
+     * Ruby-created fds have their HANDLE_FLAG_INHERIT bit kept in sync with
+     * the CRT FNOINHERIT bit by rb_w32_set_cloexec, and the standard handles
+     * from GetStdHandle are inheritable by default.  PROC_THREAD_ATTRIBUTE_
+     * HANDLE_LIST therefore needs no flag toggling (which would also race
+     * against other spawning threads). */
     return 1;
 }
 
@@ -3255,8 +3293,7 @@ prepare_inheritable_handle_list(struct rb_w32_inherit_state *st)
  * (when hPseudoConsole is non-NULL) installing a PROC_THREAD_ATTRIBUTE_
  * PSEUDOCONSOLE attribute for PTY support.  Returns the list (caller frees via
  * DeleteProcThreadAttributeList + free) or NULL on failure (errno set; st->
- * keep and st->forced are freed here, and any forced inherit flags are
- * reverted before they are freed). */
+ * keep is freed here). */
 #ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
 /* Not declared by the SDK when _WIN32_WINNT is below Windows 10; define it so
  * the future PTY wiring compiles on older targets.  hPseudoConsole is NULL
@@ -3277,8 +3314,11 @@ build_attribute_list(struct rb_w32_inherit_state *st, HANDLE hPseudoConsole)
         errno = ENOMEM;
         goto fail_nomem;
     }
-    if (!InitializeProcThreadAttributeList(attrlist, attr_count, 0, &attrsize))
-        goto fail_free;
+    if (!InitializeProcThreadAttributeList(attrlist, attr_count, 0, &attrsize)) {
+        free(attrlist);
+        attrlist = NULL;
+        goto fail_nomem;
+    }
 
     if (!UpdateProcThreadAttribute(attrlist, 0,
                                    PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
@@ -3301,21 +3341,13 @@ build_attribute_list(struct rb_w32_inherit_state *st, HANDLE hPseudoConsole)
 
   fail_free:
     errno = map_errno(GetLastError());
-    DeleteProcThreadAttributeList(attrlist);
+    if (attrlist)
+        DeleteProcThreadAttributeList(attrlist);
     free(attrlist);
     /* fall through to fail_nomem */
   fail_nomem:
-    /* Revert the inherit flag on handles we forced inheritable in
-     * prepare_inheritable_handle_list.  Both the fail_free path (after a
-     * CreateProcThreadAttributeList/UpdateProcThreadAttribute failure) and
-     * the malloc(attrlist) failure (which skips fail_free) reach here, so the
-     * revert must run from fail_nomem or the handles would stay inheritable
-     * for the rest of the process and leak into every subsequent spawn. */
-    for (int i = 0; i < st->forced_count; i++)
-        SetHandleInformation(st->forced[i], HANDLE_FLAG_INHERIT, 0);
     free(st->keep);
-    free(st->forced);
-    st->keep = st->forced = NULL;
+    st->keep = NULL;
     return NULL;
 }
 
