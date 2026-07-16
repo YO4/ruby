@@ -528,7 +528,7 @@ getDevice(int *master, int *slave, char SlaveName[DEVICELEN], int nomesg)
  *
  * A Windows child is attached to a pseudoconsole via
  * PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE (installed by win32.c from the
- * rb_w32_spawn_actions enabled with rb_w32_spawn_actions_enable_pty).  The
+ * rb_w32_spawnspec enabled with rb_w32_spawnspec_enable_pty).  The
  * master communicates with the conpty through two anonymous pipes: one for
  * input and one for output.  The "conpty-side" ends of those pipes are handed
  * to CreatePseudoConsole (which dups them into conhost), while the "master-side"
@@ -795,7 +795,7 @@ pty_getpty(int argc, VALUE *argv, VALUE self)
     VALUE execarg_obj;
     struct rb_execarg *eargp;
     struct rb_execarg sarg;
-    struct rb_w32_spawn_actions *actions = NULL;
+    struct rb_w32_spawnspec *actions = NULL;
 
     if (!conpty_resolved)
         resolve_conpty();
@@ -859,12 +859,12 @@ pty_getpty(int argc, VALUE *argv, VALUE self)
     rb_execarg_parent_start(execarg_obj);
     eargp = rb_execarg_get(execarg_obj);
 
-    actions = rb_w32_build_spawn_actions(eargp);
-    rb_w32_spawn_actions_enable_pty(actions, hPC);
+    actions = rb_w32_spawnspec_build(eargp);
+    rb_w32_spawnspec_enable_pty(actions, hPC);
 
     MEMZERO(&sarg, struct rb_execarg, 1);
     if (rb_execarg_run_options(eargp, &sarg, errbuf, sizeof(errbuf)) < 0) {
-        rb_w32_spawn_actions_destroy(actions);
+        rb_w32_spawnspec_destroy(actions);
         rb_execarg_parent_end(execarg_obj);
         close(master_in_fd);
         close(master_out_fd);
@@ -892,7 +892,7 @@ pty_getpty(int argc, VALUE *argv, VALUE self)
     }
 
     rb_execarg_parent_end(execarg_obj);
-    rb_w32_spawn_actions_destroy(actions);
+    rb_w32_spawnspec_destroy(actions);
 
     if (pid < 0) {
         close(master_in_fd);
