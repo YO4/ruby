@@ -7739,12 +7739,12 @@ pipe_open(VALUE execarg_obj, const char *modestr, enum rb_io_mode fmode,
          * set up above) propagate to the child via lpReserved2. */
         struct rb_w32_spawnspec *actions = rb_w32_spawnspec_build(eargp);
         if (args) {
-            pid = rb_w32_uaspawn_inherit(P_NOWAIT,
-                                         cmd, args, 0, CP_UTF8, actions);
+            pid = rb_w32_uaspawn_spec(P_NOWAIT,
+                                      cmd, args, actions);
         }
         else {
-            pid = rb_w32_uspawn_inherit(P_NOWAIT, cmd, NULL,
-                                        CP_UTF8, actions);
+            pid = rb_w32_uspawn_spec(P_NOWAIT, cmd, NULL,
+                                     actions);
         }
         rb_w32_spawnspec_destroy(actions);
 #   else

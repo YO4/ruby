@@ -1652,10 +1652,10 @@ rb_w32_uspawn(int mode, const char *cmd, const char *prog)
 
 /* License: Ruby's */
 rb_pid_t
-rb_w32_uspawn_inherit(int mode, const char *cmd, const char *prog, UINT cp,
-                      const struct rb_w32_spawnspec *actions)
+rb_w32_uspawn_spec(int mode, const char *cmd, const char *prog,
+                   const struct rb_w32_spawnspec *actions)
 {
-    return w32_spawn(mode, cmd, prog, cp, actions);
+    return w32_spawn(mode, cmd, prog, CP_UTF8, actions);
 }
 
 /* License: Artistic or GPL */
@@ -1777,11 +1777,10 @@ rb_w32_uaspawn(int mode, const char *prog, char *const *argv)
 
 /* License: Ruby's */
 rb_pid_t
-rb_w32_uaspawn_inherit(int mode, const char *prog, char *const *argv,
-                       DWORD flags, UINT cp,
-                       const struct rb_w32_spawnspec *actions)
+rb_w32_uaspawn_spec(int mode, const char *prog, char *const *argv,
+                    const struct rb_w32_spawnspec *actions)
 {
-    return w32_spawn_process(mode, prog, argv, -1, -1, -1, flags, cp, actions);
+    return w32_spawn_process(mode, prog, argv, -1, -1, -1, 0, CP_UTF8, actions);
 }
 
 /* License: Ruby's */

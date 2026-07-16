@@ -351,12 +351,10 @@ extern int rb_w32_spawnspec_adddir(struct rb_w32_spawnspec *actions,
                                         const char *dir);
 extern void rb_w32_spawnspec_new_pgroup(struct rb_w32_spawnspec *actions);
 
-extern rb_pid_t rb_w32_uaspawn_inherit(int mode, const char *prog, char *const *argv,
-                                       DWORD flags, UINT cp,
-                                       const struct rb_w32_spawnspec *actions);
-extern rb_pid_t rb_w32_uspawn_inherit(int mode, const char *cmd, const char *prog,
-                                      UINT cp,
-                                      const struct rb_w32_spawnspec *actions);
+extern rb_pid_t rb_w32_uaspawn_spec(int mode, const char *prog, char *const *argv,
+                                     const struct rb_w32_spawnspec *actions);
+extern rb_pid_t rb_w32_uspawn_spec(int mode, const char *cmd, const char *prog,
+                                   const struct rb_w32_spawnspec *actions);
 #undef HAVE_KILL
 #define HAVE_KILL 1
 extern int kill(rb_pid_t, int);

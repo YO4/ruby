@@ -1639,7 +1639,7 @@ proc_exec_cmd(const char *prog, VALUE argv_str, VALUE envp_str,
     if (eargp) {
         struct rb_w32_spawnspec *actions = rb_w32_spawnspec_build(eargp);
         if (actions) {
-            rb_w32_uaspawn_inherit(P_OVERLAY, prog, argv, 0, CP_UTF8, actions);
+            rb_w32_uaspawn_spec(P_OVERLAY, prog, argv, actions);
             rb_w32_spawnspec_destroy(actions);
         }
         else {
@@ -1681,7 +1681,7 @@ proc_exec_sh(const char *str, VALUE envp_str,
     if (eargp) {
         struct rb_w32_spawnspec *actions = rb_w32_spawnspec_build(eargp);
         if (actions) {
-            rb_w32_uspawn_inherit(P_OVERLAY, (char *)str, 0, CP_UTF8, actions);
+            rb_w32_uspawn_spec(P_OVERLAY, (char *)str, 0, actions);
             rb_w32_spawnspec_destroy(actions);
         }
         else {
@@ -1814,9 +1814,9 @@ proc_spawn_cmd(char **argv, VALUE prog, struct rb_execarg *eargp)
 #if defined(_WIN32)
         struct rb_w32_spawnspec *actions = rb_w32_spawnspec_build(eargp);
         if (actions) {
-            pid = rb_w32_uaspawn_inherit(P_NOWAIT,
-                                         prog ? RSTRING_PTR(prog) : 0, argv,
-                                         0, CP_UTF8, actions);
+            pid = rb_w32_uaspawn_spec(P_NOWAIT,
+                                      prog ? RSTRING_PTR(prog) : 0, argv,
+                                      actions);
             rb_w32_spawnspec_destroy(actions);
         }
         else {
@@ -1836,7 +1836,7 @@ proc_spawn_sh(char *str, struct rb_execarg *eargp)
     struct rb_w32_spawnspec *actions = rb_w32_spawnspec_build(eargp);
     rb_pid_t pid;
     if (actions) {
-        pid = rb_w32_uspawn_inherit(P_NOWAIT, (str), 0, CP_UTF8, actions);
+        pid = rb_w32_uspawn_spec(P_NOWAIT, (str), 0, actions);
         rb_w32_spawnspec_destroy(actions);
     }
     else {
