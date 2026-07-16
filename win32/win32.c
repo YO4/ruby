@@ -1193,6 +1193,55 @@ child_result(struct ChildRecord *child, int mode)
     return child->pid;
 }
 
+/* Concrete layout of the redirection requests.  This is private to win32.c:
+ * callers build it only through rb_w32_spawn_actions_*, so they never see
+ * these fields.  fd_close / fd_dup2 / fd_dup2_child are growable arrays
+ * (the *_cap members track capacity); close_others_maxhint is maintained as
+ * the highest fd referenced by any added entry. */
+struct rb_w32_fd_pair {
+    int oldfd;   /* source fd */
+    int newfd;   /* target fd */
+};
+
+struct rb_w32_spawn_actions {
+    int close_others_maxhint;
+    int close_others_do;
+    int fd_close_count;
+    int fd_close_cap;
+    int *fd_close;
+    int fd_dup2_count;
+    int fd_dup2_cap;
+    struct rb_w32_fd_pair *fd_dup2;
+    int fd_dup2_child_count;
+    int fd_dup2_child_cap;
+    struct rb_w32_fd_pair *fd_dup2_child;
+
+    /* Pseudoconsole support: when enable_pty is set, hPseudoConsole (a handle
+     * returned by CreatePseudoConsole, not owned here) is attached to the
+     * child via PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE.  When the child is not
+     * explicitly redirecting a standard stream, that stream is served by the
+     * pseudoconsole itself (its std handles come from the conpty), matching the
+     * ConPTY EchoCon sample.  The caller that created the pseudoconsole is
+     * responsible for closing hPseudoConsole. */
+    int enable_pty;
+    HANDLE hPseudoConsole;
+
+    /* UTF-16LE environment block (double-NUL terminated) built from the spawn
+     * actions' env_modification, or NULL.  When non-NULL it is passed to
+     * CreateProcessW as lpEnvironment so the child gets the requested
+     * environment without mutating this process's own (see
+     * rb_w32_spawn_actions_addenv).  Owned by this struct; freed by
+     * rb_w32_spawn_actions_destroy. */
+    WCHAR *env_block;
+
+    /* The value of the PATH entry from env_block (if any), as a UTF-8 string,
+     * or NULL.  w32_spawn uses it as the search path when resolving a bare
+     * command name, so that Process.spawn({"PATH"=>d}, "cmd") finds "cmd" in
+     * d (matching the child's environment) rather than in this process's PATH.
+     * Owned by this struct; freed by rb_w32_spawn_actions_destroy. */
+    char *path_override;
+};
+
 /* Shared inheritance state prepared from the spawn actions and consumed by
  * CreateChild.  prepare_inherit_state() fills the lpReserved2 buffer and the
  * resolved standard handles; prepare_inheritable_handle_list() and
@@ -1229,6 +1278,14 @@ struct rb_w32_inherit_state {
      * PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE attribute.  Not owned by this
      * struct; the caller that created it via CreatePseudoConsole frees it. */
     HANDLE hPseudoConsole;
+
+    /* UTF-16LE environment block (double-NUL terminated) supplied via
+     * rb_w32_spawn_actions_addenv, or NULL.  When non-NULL it is passed to
+     * CreateProcessW as lpEnvironment together with CREATE_UNICODE_ENVIRONMENT,
+     * so the child receives an environment built from the spawn actions without
+     * mutating this process's own environment.  Not owned by this struct; it is
+     * freed by rb_w32_spawn_actions_destroy. */
+    const WCHAR *env_block;
 };
 
 /* Forward declarations: the inherit-state helpers are defined later, right
@@ -1299,6 +1356,13 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
 
     dwCreationFlags |= NORMAL_PRIORITY_CLASS;
 
+    /* A non-NULL environment block is UTF-16LE; tell CreateProcessW to treat
+     * lpEnvironment as such.  With env_block == NULL we pass lpEnvironment ==
+     * NULL and the child inherits this process's environment (the
+     * CREATE_UNICODE_ENVIRONMENT flag is then irrelevant). */
+    if (st.env_block)
+        dwCreationFlags |= CREATE_UNICODE_ENVIRONMENT;
+
     if (lstrlenW(cmd) > 32767) {
         free(st.reserved2);
         child->pid = 0;		/* release the slot */
@@ -1359,7 +1423,8 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
 
     RUBY_CRITICAL {
         fRet = CreateProcessW(prog, (WCHAR *)cmd, &sa, &sa,
-                              sa.bInheritHandle, dwCreationFlags, NULL, NULL,
+                              sa.bInheritHandle, dwCreationFlags,
+                              (LPWSTR)st.env_block, NULL,
                               attrlist ? &aStartupInfoEx.StartupInfo : &aStartupInfo,
                               &aProcessInformation);
         if (!fRet)
@@ -1431,7 +1496,9 @@ w32_spawn(int mode, const char *cmd, const char *prog, UINT cp,
     if (check_spawn_mode(mode)) return -1;
 
     if (prog) {
-        if (!(p = dln_find_exe_r(prog, NULL, fbuf, sizeof(fbuf)))) {
+        const char *search_path = (actions && actions->path_override)
+            ? actions->path_override : NULL;
+        if (!(p = dln_find_exe_r(prog, search_path, fbuf, sizeof(fbuf)))) {
             shell = prog;
         }
         else {
@@ -1494,7 +1561,9 @@ w32_spawn(int mode, const char *cmd, const char *prog, UINT cp,
                     break;
                 }
             }
-            shell = dln_find_exe_r(shell, NULL, fbuf, sizeof(fbuf));
+            shell = dln_find_exe_r(shell,
+                (actions && actions->path_override) ? actions->path_override : NULL,
+                fbuf, sizeof(fbuf));
             if (p && slash) translate_char(p, '/', '\\', cp);
             if (!shell) {
                 shell = p ? p : cmd;
@@ -1601,7 +1670,9 @@ w32_spawn_process(int mode, const char *prog, char *const *argv,
         prog = shell;
         c_switch = 1;
     }
-    else if ((cmd = dln_find_exe_r(prog, NULL, fbuf, sizeof(fbuf)))) {
+    else if ((cmd = dln_find_exe_r(prog,
+                  (actions && actions->path_override) ? actions->path_override : NULL,
+                  fbuf, sizeof(fbuf)))) {
         if (cmd == prog) strlcpy(cmd = fbuf, prog, sizeof(fbuf));
         translate_char(cmd, '/', '\\', cp);
         prog = cmd;
@@ -2813,40 +2884,6 @@ rb_w32_set_cloexec(int fd, int cloexec)
     return 0;
 }
 
-/* Concrete layout of the redirection requests.  This is private to win32.c:
- * callers build it only through rb_w32_spawn_actions_*, so they never see
- * these fields.  fd_close / fd_dup2 / fd_dup2_child are growable arrays
- * (the *_cap members track capacity); close_others_maxhint is maintained as
- * the highest fd referenced by any added entry. */
-struct rb_w32_fd_pair {
-    int oldfd;   /* source fd */
-    int newfd;   /* target fd */
-};
-
-struct rb_w32_spawn_actions {
-    int close_others_maxhint;
-    int close_others_do;
-    int fd_close_count;
-    int fd_close_cap;
-    int *fd_close;
-    int fd_dup2_count;
-    int fd_dup2_cap;
-    struct rb_w32_fd_pair *fd_dup2;
-    int fd_dup2_child_count;
-    int fd_dup2_child_cap;
-    struct rb_w32_fd_pair *fd_dup2_child;
-
-    /* Pseudoconsole support: when enable_pty is set, hPseudoConsole (a handle
-     * returned by CreatePseudoConsole, not owned here) is attached to the
-     * child via PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE.  When the child is not
-     * explicitly redirecting a standard stream, that stream is served by the
-     * pseudoconsole itself (its std handles come from the conpty), matching the
-     * ConPTY EchoCon sample.  The caller that created the pseudoconsole is
-     * responsible for closing hPseudoConsole. */
-    int enable_pty;
-    HANDLE hPseudoConsole;
-};
-
 struct rb_w32_spawn_actions *
 rb_w32_spawn_actions_init(void)
 {
@@ -2862,6 +2899,8 @@ rb_w32_spawn_actions_destroy(struct rb_w32_spawn_actions *actions)
     if (actions->fd_close) xfree(actions->fd_close);
     if (actions->fd_dup2) xfree(actions->fd_dup2);
     if (actions->fd_dup2_child) xfree(actions->fd_dup2_child);
+    if (actions->env_block) xfree(actions->env_block);
+    if (actions->path_override) xfree(actions->path_override);
     xfree(actions);
 }
 
@@ -2872,6 +2911,109 @@ rb_w32_spawn_actions_enable_pty(struct rb_w32_spawn_actions *actions,
     if (!actions) return;
     actions->enable_pty = 1;
     actions->hPseudoConsole = hPseudoConsole;
+}
+
+/* Build a UTF-16LE environment block from a NULL-terminated array of UTF-8
+ * "KEY=VALUE" strings (envp) and store it in actions->env_block.  The block
+ * follows the format CreateProcessW expects with CREATE_UNICODE_ENVIRONMENT:
+ * each entry is a NUL-terminated "NAME=VALUE" string and the block ends with a
+ * double NUL.  This mirrors UCRT's construct_environment_block:
+ *
+ *   - the current-directory entries (names beginning with '=') are copied from
+ *     the OS environment (GetEnvironmentStringsW) at the head of the block;
+ *   - SystemRoot is appended automatically when the caller did not supply it.
+ *
+ * The previous block (if any) is replaced and freed.  On allocation failure
+ * errno is set to ENOMEM and actions->env_block is left as it was.  When envp
+ * is NULL the stored block is freed and reset to NULL (meaning "use the parent
+ * process environment", i.e. pass lpEnvironment == NULL to CreateProcessW). */
+void
+rb_w32_spawn_actions_addenv(struct rb_w32_spawn_actions *actions,
+                            char *const *envp)
+{
+    if (!actions) return;
+
+    if (actions->env_block) {
+        xfree(actions->env_block);
+        actions->env_block = NULL;
+    }
+    if (!envp) return;
+
+    /* Collect the OS current-directory entries (those starting with '=') from
+     * the wide environment block.  They are contiguous at the head and we copy
+     * them verbatim to the front of the new block.  Guard against a block that
+     * does not begin with a cwd entry (or is empty) so we never run past the
+     * terminating double NUL. */
+    WCHAR *os_env = GetEnvironmentStringsW();
+    if (!os_env) {
+        errno = ENOMEM;
+        return;
+    }
+    WCHAR *first_cwd = os_env;
+    WCHAR *last_cwd = os_env;
+    while (last_cwd[0] == L'=' && last_cwd[1] != L'\0' &&
+           last_cwd[2] == L':' && last_cwd[3] == L'=') {
+        last_cwd += 4 + lstrlenW(last_cwd + 4) + 1;
+    }
+    /* If the block does not start with cwd entries, copy none of them. */
+    if (last_cwd == os_env)
+        first_cwd = os_env;
+    size_t cwd_chars = (size_t)(last_cwd - first_cwd);
+
+    /* Determine the total size: cwd entries + each "KEY=VALUE" + double NUL.
+     * We do not auto-add SystemRoot: the spawn options (env_modification)
+     * fully describe the child environment, matching the previous
+     * ruby_setenv-based setup where SystemRoot was only present if the caller
+     * included it.  (UCRT's _spawn auto-adds SystemRoot, but Ruby's existing
+     * behaviour and tests expect the environment to be exactly what the caller
+     * specified.) */
+    size_t envp_chars = 2; /* double NUL terminator */
+    for (char *const *it = envp; *it; it++) {
+        const char *e = *it;
+        /* Record the PATH entry so w32_spawn resolves a bare command against
+         * the child's PATH, not this process's. */
+        if ((e[0] == 'P' || e[0] == 'p') &&
+            (e[1] == 'A' || e[1] == 'a') &&
+            (e[2] == 'T' || e[2] == 't') &&
+            (e[3] == 'H' || e[3] == 'h') && e[4] == '=') {
+            if (actions->path_override) xfree(actions->path_override);
+            actions->path_override = (char *)xmalloc(strlen(e + 5) + 1);
+            strcpy(actions->path_override, e + 5);
+        }
+        WCHAR *w = utf8_to_wstr(e, NULL);
+        envp_chars += lstrlenW(w) + 1;
+        xfree(w);
+    }
+
+    size_t total_chars = cwd_chars + envp_chars;
+    WCHAR *block = (WCHAR *)xmalloc(total_chars * sizeof(WCHAR));
+    if (!block) {
+        FreeEnvironmentStringsW(os_env);
+        errno = ENOMEM;
+        return;
+    }
+
+    WCHAR *dst = block;
+    if (cwd_chars) {
+        memcpy(dst, first_cwd, cwd_chars * sizeof(WCHAR));
+        dst += cwd_chars;
+    }
+    for (char *const *it = envp; *it; it++) {
+        WCHAR *w = utf8_to_wstr(*it, NULL);
+        size_t len = lstrlenW(w) + 1;
+        memcpy(dst, w, len * sizeof(WCHAR));
+        dst += len;
+        xfree(w);
+    }
+    /* Double NUL terminator (the loop wrote one NUL per entry; ensure the block
+     * ends with an extra NUL so an empty block still has the required two). */
+    *dst = L'\0';
+    if (dst == block)
+        *dst++ = L'\0';
+
+    actions->env_block = block;
+
+    FreeEnvironmentStringsW(os_env);
 }
 
 static void
@@ -3219,6 +3361,11 @@ prepare_inherit_state(const struct rb_w32_spawn_actions *actions,
      * it via CreatePseudoConsole owns and closes it; we only reference it. */
     if (actions)
         st->hPseudoConsole = actions->hPseudoConsole;
+
+    /* Carry the environment block (if any) into st so CreateChild passes it to
+     * CreateProcessW as lpEnvironment.  NULL means "inherit the parent process
+     * environment" (lpEnvironment == NULL). */
+    st->env_block = actions ? actions->env_block : NULL;
 
     /* lpReserved2: the child's CRT reads it back to discover which fds/handles
      * to inherit.  See make_lpReserved2 for the buffer layout.  NULL with

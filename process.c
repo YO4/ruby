@@ -179,6 +179,7 @@ static int exec_async_signal_safe(const struct rb_execarg *, char *, size_t);
 
 VALUE rb_envtbl(void);
 VALUE rb_env_to_hash(void);
+static int fill_envp_buf_i(st_data_t st_key, st_data_t st_val, st_data_t arg);
 
 #if 1
 #define p_uid_from_name p_uid_from_name
@@ -2352,6 +2353,58 @@ rb_w32_build_spawn_actions(const struct rb_execarg *eargp)
         }
     }
 
+    /* Build the child environment from the spawn options and pass it to the
+     * child via CreateProcessW's lpEnvironment (see rb_w32_spawn_actions_addenv)
+     * instead of mutating this process's own environment.  This mirrors the
+     * Unix path, which exec's the child with an explicit environ, and avoids
+     * the parent-env corruption that ruby_setenv-based setup would cause.  When
+     * neither :unsetenv_others nor env modifications were given, we pass NULL
+     * so the child inherits the parent environment unchanged. */
+    {
+        int unsetenv_others = eargp->unsetenv_others_given &&
+                              eargp->unsetenv_others_do;
+        VALUE envopts = eargp->env_modification;
+        if (unsetenv_others || envopts != Qfalse) {
+            VALUE envtbl = unsetenv_others ? rb_hash_new() : rb_env_to_hash();
+            hide_obj(envtbl);
+            if (envopts != Qfalse) {
+                st_table *stenv = RHASH_TBL_RAW(envtbl);
+                long i;
+                for (i = 0; i < RARRAY_LEN(envopts); i++) {
+                    VALUE pair = RARRAY_AREF(envopts, i);
+                    VALUE key = RARRAY_AREF(pair, 0);
+                    VALUE val = RARRAY_AREF(pair, 1);
+                    if (NIL_P(val)) {
+                        st_data_t stkey = (st_data_t)key;
+                        st_delete(stenv, &stkey, NULL);
+                    }
+                    else {
+                        st_insert(stenv, (st_data_t)key, (st_data_t)val);
+                        RB_OBJ_WRITTEN(envtbl, Qundef, key);
+                        RB_OBJ_WRITTEN(envtbl, Qundef, val);
+                    }
+                }
+            }
+            /* Serialize envtbl into a contiguous "KEY=VALUE\0" buffer and a
+             * parallel NULL-terminated array of char* into it. */
+            VALUE envp_buf = rb_str_buf_new(0);
+            hide_obj(envp_buf);
+            rb_hash_stlike_foreach(envtbl, fill_envp_buf_i, (st_data_t)envp_buf);
+            long count = RHASH_SIZE(envtbl);
+            char **envp = (char **)xmalloc((size_t)(count + 1) * sizeof(char *));
+            char *p = RSTRING_PTR(envp_buf);
+            char *ep = p + RSTRING_LEN(envp_buf);
+            long idx = 0;
+            while (p < ep) {
+                envp[idx++] = p;
+                p += strlen(p) + 1;
+            }
+            envp[idx] = NULL;
+            rb_w32_spawn_actions_addenv(actions, envp);
+            xfree(envp);
+        }
+    }
+
     return actions;
 }
 #endif /* _WIN32 */
@@ -3495,7 +3548,7 @@ run_exec_rlimit(VALUE ary, struct rb_execarg *sargp, char *errmsg, size_t errmsg
 }
 #endif
 
-#if !defined(HAVE_WORKING_FORK)
+#if !defined(HAVE_WORKING_FORK) && !defined(_WIN32)
 static VALUE
 save_env_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, ary))
 {
@@ -3554,7 +3607,7 @@ rb_execarg_run_options(const struct rb_execarg *eargp, struct rb_execarg *sargp,
     }
 #endif
 
-#if !defined(HAVE_WORKING_FORK)
+#if !defined(HAVE_WORKING_FORK) && !defined(_WIN32)
     if (eargp->unsetenv_others_given && eargp->unsetenv_others_do) {
         save_env(sargp);
         rb_env_clear();
