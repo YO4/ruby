@@ -881,14 +881,14 @@ pty_getpty(int argc, VALUE *argv, VALUE self)
     }
 
     if (eargp->use_shell) {
-        pid = rb_w32_uspawn_inherit(P_NOWAIT,
-                                    RSTRING_PTR(progv), 0, CP_UTF8, actions);
+        pid = rb_w32_uspawn_spec(P_NOWAIT,
+                                 RSTRING_PTR(progv), 0, actions);
     }
     else {
         char **argvp = ARGVSTR2ARGV(eargp->invoke.cmd.argv_str);
-        pid = rb_w32_uaspawn_inherit(P_NOWAIT,
-                                     progv ? RSTRING_PTR(progv) : 0,
-                                     argvp, 0, CP_UTF8, actions);
+        pid = rb_w32_uaspawn_spec(P_NOWAIT,
+                                  progv ? RSTRING_PTR(progv) : 0,
+                                  argvp, actions);
     }
 
     rb_execarg_parent_end(execarg_obj);
