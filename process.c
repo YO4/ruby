@@ -1812,15 +1812,11 @@ proc_spawn_cmd(char **argv, VALUE prog, struct rb_execarg *eargp)
 
     if (argv[0]) {
 #if defined(_WIN32)
-        DWORD flags = 0;
-        if (eargp->new_pgroup_given && eargp->new_pgroup_flag) {
-            flags = CREATE_NEW_PROCESS_GROUP;
-        }
         struct rb_w32_spawnspec *actions = rb_w32_spawnspec_build(eargp);
         if (actions) {
             pid = rb_w32_uaspawn_inherit(P_NOWAIT,
                                          prog ? RSTRING_PTR(prog) : 0, argv,
-                                         flags, CP_UTF8, actions);
+                                         0, CP_UTF8, actions);
             rb_w32_spawnspec_destroy(actions);
         }
         else {
@@ -2436,6 +2432,13 @@ rb_w32_spawnspec_build(const struct rb_execarg *eargp)
             rb_w32_spawnspec_destroy(actions);
             return NULL;
         }
+    }
+
+    /* Back the :new_pgroup spawn option with CREATE_NEW_PROCESS_GROUP, applied
+     * to the child's creation flags inside CreateChild (see
+     * rb_w32_spawnspec_new_pgroup). */
+    if (eargp->new_pgroup_given && eargp->new_pgroup_flag) {
+        rb_w32_spawnspec_new_pgroup(actions);
     }
 
     return actions;

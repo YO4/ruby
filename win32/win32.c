@@ -1245,6 +1245,12 @@ struct rb_w32_spawnspec {
      * lpCurrentDirectory, or NULL to inherit this process's cwd.  Owned by
      * this struct; freed by rb_w32_spawnspec_destroy. */
     WCHAR *cwd;
+
+    /* When set, CreateChild adds CREATE_NEW_PROCESS_GROUP to the child's
+     * creation flags so the new process becomes the root of its own console
+     * process group (used by the :new_pgroup spawn option on Windows).
+     * Set via rb_w32_spawnspec_new_pgroup. */
+    int new_pgroup;
 };
 
 /* Shared inheritance state prepared from the spawn actions and consumed by
@@ -1296,6 +1302,10 @@ struct rb_w32_inherit_state {
      * NULL.  When non-NULL it is passed to CreateProcessW as lpCurrentDirectory.
      * Not owned by this struct; it is freed by rb_w32_spawnspec_destroy. */
     const WCHAR *cwd;
+
+    /* When non-zero, CreateChild adds CREATE_NEW_PROCESS_GROUP to the child's
+     * creation flags.  Supplied via rb_w32_spawnspec_new_pgroup. */
+    int new_pgroup;
 };
 
 /* Forward declarations: the inherit-state helpers are defined later, right
@@ -1372,6 +1382,10 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
      * CREATE_UNICODE_ENVIRONMENT flag is then irrelevant). */
     if (st.env_block)
         dwCreationFlags |= CREATE_UNICODE_ENVIRONMENT;
+
+    /* :new_pgroup asks the child to start a fresh console process group. */
+    if (st.new_pgroup)
+        dwCreationFlags |= CREATE_NEW_PROCESS_GROUP;
 
     if (lstrlenW(cmd) > 32767) {
         free(st.reserved2);
@@ -3089,6 +3103,16 @@ rb_w32_spawnspec_adddir(struct rb_w32_spawnspec *actions,
     return 0;
 }
 
+/* Request that the child starts a new console process group, by adding
+ * CREATE_NEW_PROCESS_GROUP to its creation flags in CreateChild.  This backs
+ * the :new_pgroup spawn option on Windows. */
+void
+rb_w32_spawnspec_new_pgroup(struct rb_w32_spawnspec *actions)
+{
+    if (!actions) return;
+    actions->new_pgroup = 1;
+}
+
 static void
 spawnspec_note_fd(struct rb_w32_spawnspec *actions, int fd)
 {
@@ -3444,6 +3468,10 @@ prepare_inherit_state(const struct rb_w32_spawnspec *actions,
      * CreateProcessW as lpCurrentDirectory.  NULL means "inherit this
      * process's cwd" (lpCurrentDirectory == NULL). */
     st->cwd = actions ? actions->cwd : NULL;
+
+    /* Carry the new-process-group request (if any) into st so CreateChild adds
+     * CREATE_NEW_PROCESS_GROUP to the child's creation flags. */
+    st->new_pgroup = actions ? actions->new_pgroup : 0;
 
     /* lpReserved2: the child's CRT reads it back to discover which fds/handles
      * to inherit.  See make_lpReserved2 for the buffer layout.  NULL with

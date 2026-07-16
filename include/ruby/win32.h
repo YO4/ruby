@@ -349,6 +349,7 @@ extern void rb_w32_spawnspec_addenv(struct rb_w32_spawnspec *actions,
                                         char *const *envp);
 extern int rb_w32_spawnspec_adddir(struct rb_w32_spawnspec *actions,
                                         const char *dir);
+extern void rb_w32_spawnspec_new_pgroup(struct rb_w32_spawnspec *actions);
 
 extern rb_pid_t rb_w32_uaspawn_inherit(int mode, const char *prog, char *const *argv,
                                        DWORD flags, UINT cp,
