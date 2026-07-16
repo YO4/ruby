@@ -1194,7 +1194,7 @@ child_result(struct ChildRecord *child, int mode)
 }
 
 /* Concrete layout of the redirection requests.  This is private to win32.c:
- * callers build it only through rb_w32_spawn_actions_*, so they never see
+ * callers build it only through rb_w32_spawnspec_*, so they never see
  * these fields.  fd_close / fd_dup2 / fd_dup2_child are growable arrays
  * (the *_cap members track capacity); close_others_maxhint is maintained as
  * the highest fd referenced by any added entry. */
@@ -1203,7 +1203,7 @@ struct rb_w32_fd_pair {
     int newfd;   /* target fd */
 };
 
-struct rb_w32_spawn_actions {
+struct rb_w32_spawnspec {
     int close_others_maxhint;
     int close_others_do;
     int fd_close_count;
@@ -1230,20 +1230,20 @@ struct rb_w32_spawn_actions {
      * actions' env_modification, or NULL.  When non-NULL it is passed to
      * CreateProcessW as lpEnvironment so the child gets the requested
      * environment without mutating this process's own (see
-     * rb_w32_spawn_actions_addenv).  Owned by this struct; freed by
-     * rb_w32_spawn_actions_destroy. */
+     * rb_w32_spawnspec_addenv).  Owned by this struct; freed by
+     * rb_w32_spawnspec_destroy. */
     WCHAR *env_block;
 
     /* The value of the PATH entry from env_block (if any), as a UTF-8 string,
      * or NULL.  w32_spawn uses it as the search path when resolving a bare
      * command name, so that Process.spawn({"PATH"=>d}, "cmd") finds "cmd" in
      * d (matching the child's environment) rather than in this process's PATH.
-     * Owned by this struct; freed by rb_w32_spawn_actions_destroy. */
+     * Owned by this struct; freed by rb_w32_spawnspec_destroy. */
     char *path_override;
 
     /* UTF-16LE current directory passed to CreateProcessW as
      * lpCurrentDirectory, or NULL to inherit this process's cwd.  Owned by
-     * this struct; freed by rb_w32_spawn_actions_destroy. */
+     * this struct; freed by rb_w32_spawnspec_destroy. */
     WCHAR *cwd;
 };
 
@@ -1278,29 +1278,29 @@ struct rb_w32_inherit_state {
     HANDLE *duped;
     int duped_count;
 
-    /* Pseudoconsole handle supplied via rb_w32_spawn_actions_enable_pty, or
+    /* Pseudoconsole handle supplied via rb_w32_spawnspec_enable_pty, or
      * NULL.  When non-NULL, build_attribute_list installs a
      * PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE attribute.  Not owned by this
      * struct; the caller that created it via CreatePseudoConsole frees it. */
     HANDLE hPseudoConsole;
 
     /* UTF-16LE environment block (double-NUL terminated) supplied via
-     * rb_w32_spawn_actions_addenv, or NULL.  When non-NULL it is passed to
+     * rb_w32_spawnspec_addenv, or NULL.  When non-NULL it is passed to
      * CreateProcessW as lpEnvironment together with CREATE_UNICODE_ENVIRONMENT,
      * so the child receives an environment built from the spawn actions without
      * mutating this process's own environment.  Not owned by this struct; it is
-     * freed by rb_w32_spawn_actions_destroy. */
+     * freed by rb_w32_spawnspec_destroy. */
     const WCHAR *env_block;
 
-    /* UTF-16LE current directory supplied via rb_w32_spawn_actions_adddir, or
+    /* UTF-16LE current directory supplied via rb_w32_spawnspec_adddir, or
      * NULL.  When non-NULL it is passed to CreateProcessW as lpCurrentDirectory.
-     * Not owned by this struct; it is freed by rb_w32_spawn_actions_destroy. */
+     * Not owned by this struct; it is freed by rb_w32_spawnspec_destroy. */
     const WCHAR *cwd;
 };
 
 /* Forward declarations: the inherit-state helpers are defined later, right
  * after rb_w32_set_cloexec. */
-static int prepare_inherit_state(const struct rb_w32_spawn_actions *actions,
+static int prepare_inherit_state(const struct rb_w32_spawnspec *actions,
                                  HANDLE hInput, HANDLE hOutput, HANDLE hError,
                                  struct rb_w32_inherit_state *st);
 static int prepare_inheritable_handle_list(struct rb_w32_inherit_state *st);
@@ -1310,7 +1310,7 @@ static LPPROC_THREAD_ATTRIBUTE_LIST build_attribute_list(struct rb_w32_inherit_s
 static int
 CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
             HANDLE hInput, HANDLE hOutput, HANDLE hError, DWORD dwCreationFlags,
-            const struct rb_w32_spawn_actions *actions)
+            const struct rb_w32_spawnspec *actions)
 {
     BOOL fRet;
     STARTUPINFOW aStartupInfo;
@@ -1490,7 +1490,7 @@ is_batch(const char *cmd)
 /* License: Artistic or GPL */
 static rb_pid_t
 w32_spawn(int mode, const char *cmd, const char *prog, UINT cp,
-          const struct rb_w32_spawn_actions *actions)
+          const struct rb_w32_spawnspec *actions)
 {
     char fbuf[PATH_MAX];
     char *p = NULL;
@@ -1639,7 +1639,7 @@ rb_w32_uspawn(int mode, const char *cmd, const char *prog)
 /* License: Ruby's */
 rb_pid_t
 rb_w32_uspawn_inherit(int mode, const char *cmd, const char *prog, UINT cp,
-                      const struct rb_w32_spawn_actions *actions)
+                      const struct rb_w32_spawnspec *actions)
 {
     return w32_spawn(mode, cmd, prog, cp, actions);
 }
@@ -1648,7 +1648,7 @@ rb_w32_uspawn_inherit(int mode, const char *cmd, const char *prog, UINT cp,
 static rb_pid_t
 w32_spawn_process(int mode, const char *prog, char *const *argv,
                   int in_fd, int out_fd, int err_fd, DWORD flags, UINT cp,
-                  const struct rb_w32_spawn_actions *actions)
+                  const struct rb_w32_spawnspec *actions)
 {
     int c_switch = 0;
     size_t len;
@@ -1765,7 +1765,7 @@ rb_w32_uaspawn(int mode, const char *prog, char *const *argv)
 rb_pid_t
 rb_w32_uaspawn_inherit(int mode, const char *prog, char *const *argv,
                        DWORD flags, UINT cp,
-                       const struct rb_w32_spawn_actions *actions)
+                       const struct rb_w32_spawnspec *actions)
 {
     return w32_spawn_process(mode, prog, argv, -1, -1, -1, flags, cp, actions);
 }
@@ -2894,16 +2894,16 @@ rb_w32_set_cloexec(int fd, int cloexec)
     return 0;
 }
 
-struct rb_w32_spawn_actions *
-rb_w32_spawn_actions_init(void)
+struct rb_w32_spawnspec *
+rb_w32_spawnspec_init(void)
 {
-    struct rb_w32_spawn_actions *actions = ALLOC(struct rb_w32_spawn_actions);
+    struct rb_w32_spawnspec *actions = ALLOC(struct rb_w32_spawnspec);
     memset(actions, 0, sizeof(*actions));
     return actions;
 }
 
 void
-rb_w32_spawn_actions_destroy(struct rb_w32_spawn_actions *actions)
+rb_w32_spawnspec_destroy(struct rb_w32_spawnspec *actions)
 {
     if (!actions) return;
     if (actions->fd_close) xfree(actions->fd_close);
@@ -2916,7 +2916,7 @@ rb_w32_spawn_actions_destroy(struct rb_w32_spawn_actions *actions)
 }
 
 void
-rb_w32_spawn_actions_enable_pty(struct rb_w32_spawn_actions *actions,
+rb_w32_spawnspec_enable_pty(struct rb_w32_spawnspec *actions,
                                 HANDLE hPseudoConsole)
 {
     if (!actions) return;
@@ -2939,7 +2939,7 @@ rb_w32_spawn_actions_enable_pty(struct rb_w32_spawn_actions *actions,
  * is NULL the stored block is freed and reset to NULL (meaning "use the parent
  * process environment", i.e. pass lpEnvironment == NULL to CreateProcessW). */
 void
-rb_w32_spawn_actions_addenv(struct rb_w32_spawn_actions *actions,
+rb_w32_spawnspec_addenv(struct rb_w32_spawnspec *actions,
                             char *const *envp)
 {
     if (!actions) return;
@@ -3036,7 +3036,7 @@ rb_w32_spawn_actions_addenv(struct rb_w32_spawn_actions *actions,
  * replaced and freed.  On failure errno is set and actions->cwd is left
  * unchanged. */
 int
-rb_w32_spawn_actions_adddir(struct rb_w32_spawn_actions *actions,
+rb_w32_spawnspec_adddir(struct rb_w32_spawnspec *actions,
                             const char *dir)
 {
     if (!actions) return -1;
@@ -3090,14 +3090,14 @@ rb_w32_spawn_actions_adddir(struct rb_w32_spawn_actions *actions,
 }
 
 static void
-spawn_actions_note_fd(struct rb_w32_spawn_actions *actions, int fd)
+spawnspec_note_fd(struct rb_w32_spawnspec *actions, int fd)
 {
     if (fd > actions->close_others_maxhint)
         actions->close_others_maxhint = fd;
 }
 
 static void
-spawn_actions_add_int(struct rb_w32_spawn_actions *actions,
+spawnspec_add_int(struct rb_w32_spawnspec *actions,
                       int **arr, int *count, int *cap, int v)
 {
     if (*count >= *cap) {
@@ -3105,11 +3105,11 @@ spawn_actions_add_int(struct rb_w32_spawn_actions *actions,
         REALLOC_N(*arr, int, *cap);
     }
     (*arr)[(*count)++] = v;
-    spawn_actions_note_fd(actions, v);
+    spawnspec_note_fd(actions, v);
 }
 
 static void
-spawn_actions_add_pair(struct rb_w32_spawn_actions *actions,
+spawnspec_add_pair(struct rb_w32_spawnspec *actions,
                        struct rb_w32_fd_pair **arr, int *count, int *cap,
                        int oldfd, int newfd)
 {
@@ -3120,31 +3120,31 @@ spawn_actions_add_pair(struct rb_w32_spawn_actions *actions,
     (*arr)[*count].oldfd = oldfd;
     (*arr)[*count].newfd = newfd;
     (*count)++;
-    spawn_actions_note_fd(actions, oldfd);
-    spawn_actions_note_fd(actions, newfd);
+    spawnspec_note_fd(actions, oldfd);
+    spawnspec_note_fd(actions, newfd);
 }
 
 void
-rb_w32_spawn_actions_addclose(struct rb_w32_spawn_actions *actions, int fd)
+rb_w32_spawnspec_addclose(struct rb_w32_spawnspec *actions, int fd)
 {
-    spawn_actions_add_int(actions, &actions->fd_close,
+    spawnspec_add_int(actions, &actions->fd_close,
                           &actions->fd_close_count, &actions->fd_close_cap, fd);
 }
 
 void
-rb_w32_spawn_actions_adddup2(struct rb_w32_spawn_actions *actions,
+rb_w32_spawnspec_adddup2(struct rb_w32_spawnspec *actions,
                              int oldfd, int newfd)
 {
-    spawn_actions_add_pair(actions, &actions->fd_dup2,
+    spawnspec_add_pair(actions, &actions->fd_dup2,
                            &actions->fd_dup2_count, &actions->fd_dup2_cap,
                            oldfd, newfd);
 }
 
 void
-rb_w32_spawn_actions_adddup2_child(struct rb_w32_spawn_actions *actions,
+rb_w32_spawnspec_adddup2_child(struct rb_w32_spawnspec *actions,
                                     int oldfd, int newfd)
 {
-    spawn_actions_add_pair(actions, &actions->fd_dup2_child,
+    spawnspec_add_pair(actions, &actions->fd_dup2_child,
                            &actions->fd_dup2_child_count, &actions->fd_dup2_child_cap,
                            oldfd, newfd);
 }
@@ -3155,7 +3155,7 @@ rb_w32_spawn_actions_adddup2_child(struct rb_w32_spawn_actions *actions,
  * 0 (matches Unix's current default, which leaves close_on_exec = false fds
  * inheritable). */
 void
-rb_w32_spawn_actions_set_close_others(struct rb_w32_spawn_actions *actions,
+rb_w32_spawnspec_set_close_others(struct rb_w32_spawnspec *actions,
                                       int close_others_do)
 {
     actions->close_others_do = close_others_do ? 1 : 0;
@@ -3174,7 +3174,7 @@ rb_w32_spawn_actions_set_close_others(struct rb_w32_spawn_actions *actions,
  * Entries whose handle is INVALID_HANDLE_VALUE, or whose osfile does not have
  * FOPEN set, are emitted as osfile=0 / handle=INVALID_HANDLE_VALUE and skipped
  * by the child.  The buffer is built directly from the logical redirection
- * requests (struct rb_w32_spawn_actions): the scan of every open fd and all
+ * requests (struct rb_w32_spawnspec): the scan of every open fd and all
  * the FNOINHERIT handling happen here, so the rest of the spawn path only ever
  * sees this opaque byte buffer and never the CRT-internal handle/osfile
  * details.  (CreateChild reads the per-fd handle/osfile back out of the same
@@ -3188,7 +3188,7 @@ rb_w32_spawn_actions_set_close_others(struct rb_w32_spawn_actions *actions,
  * concurrently while the scan runs.
  */
 static BYTE *
-make_lpReserved2(const struct rb_w32_spawn_actions *actions,
+make_lpReserved2(const struct rb_w32_spawnspec *actions,
                  WORD *cbReserved2_out)
 {
     int max_fd = actions->close_others_maxhint;
@@ -3404,7 +3404,7 @@ make_lpReserved2(const struct rb_w32_spawn_actions *actions,
  * pseudoconsole-backed standard stream apart from one the caller redirected to
  * a real handle. */
 static int
-spawn_actions_targets_fd(const struct rb_w32_spawn_actions *actions, int fd)
+spawnspec_targets_fd(const struct rb_w32_spawnspec *actions, int fd)
 {
     int i;
     if (!actions) return 0;
@@ -3423,7 +3423,7 @@ spawn_actions_targets_fd(const struct rb_w32_spawn_actions *actions, int fd)
  * errno == ENOMEM (st->reserved2 left NULL).  The caller must hold the GVL so
  * the fd scan is not raced by another thread. */
 static int
-prepare_inherit_state(const struct rb_w32_spawn_actions *actions,
+prepare_inherit_state(const struct rb_w32_spawnspec *actions,
                       HANDLE hInput, HANDLE hOutput, HANDLE hError,
                       struct rb_w32_inherit_state *st)
 {
@@ -3475,7 +3475,7 @@ prepare_inherit_state(const struct rb_w32_spawn_actions *actions,
     int conpty_stream[3] = {0, 0, 0};
     if (st->hPseudoConsole) {
         for (int i = 0; i < 3; i++)
-            conpty_stream[i] = !spawn_actions_targets_fd(actions, i);
+            conpty_stream[i] = !spawnspec_targets_fd(actions, i);
     }
 
     /* Ensure every handle the child will inherit is OS-inheritable.  Redirect
@@ -3659,7 +3659,7 @@ prepare_inheritable_handle_list(struct rb_w32_inherit_state *st)
 /* Build the PROC_THREAD_ATTRIBUTE_LIST restricting inheritance to st->keep and
  * (when st->hPseudoConsole is non-NULL) installing a PROC_THREAD_ATTRIBUTE_
  * PSEUDOCONSOLE attribute for PTY support.  The pseudoconsole handle is carried
- * by st (set from rb_w32_spawn_actions_enable_pty via prepare_inherit_state),
+ * by st (set from rb_w32_spawnspec_enable_pty via prepare_inherit_state),
  * so CreateChild decides and performs the PTY setup solely through st.  Returns
  * the list (caller frees via DeleteProcThreadAttributeList + free) or NULL on
  * failure (errno set; st->keep is freed here). */

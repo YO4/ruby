@@ -1637,10 +1637,10 @@ proc_exec_cmd(const char *prog, VALUE argv_str, VALUE envp_str,
 
 #ifdef _WIN32
     if (eargp) {
-        struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
+        struct rb_w32_spawnspec *actions = rb_w32_spawnspec_build(eargp);
         if (actions) {
             rb_w32_uaspawn_inherit(P_OVERLAY, prog, argv, 0, CP_UTF8, actions);
-            rb_w32_spawn_actions_destroy(actions);
+            rb_w32_spawnspec_destroy(actions);
         }
         else {
             rb_sys_fail_str(eargp->chdir_dir);
@@ -1679,10 +1679,10 @@ proc_exec_sh(const char *str, VALUE envp_str,
 
 #ifdef _WIN32
     if (eargp) {
-        struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
+        struct rb_w32_spawnspec *actions = rb_w32_spawnspec_build(eargp);
         if (actions) {
             rb_w32_uspawn_inherit(P_OVERLAY, (char *)str, 0, CP_UTF8, actions);
-            rb_w32_spawn_actions_destroy(actions);
+            rb_w32_spawnspec_destroy(actions);
         }
         else {
             rb_sys_fail_str(eargp->chdir_dir);
@@ -1816,12 +1816,12 @@ proc_spawn_cmd(char **argv, VALUE prog, struct rb_execarg *eargp)
         if (eargp->new_pgroup_given && eargp->new_pgroup_flag) {
             flags = CREATE_NEW_PROCESS_GROUP;
         }
-        struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
+        struct rb_w32_spawnspec *actions = rb_w32_spawnspec_build(eargp);
         if (actions) {
             pid = rb_w32_uaspawn_inherit(P_NOWAIT,
                                          prog ? RSTRING_PTR(prog) : 0, argv,
                                          flags, CP_UTF8, actions);
-            rb_w32_spawn_actions_destroy(actions);
+            rb_w32_spawnspec_destroy(actions);
         }
         else {
             rb_sys_fail_str(eargp->chdir_dir);
@@ -1837,11 +1837,11 @@ proc_spawn_cmd(char **argv, VALUE prog, struct rb_execarg *eargp)
 static rb_pid_t
 proc_spawn_sh(char *str, struct rb_execarg *eargp)
 {
-    struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
+    struct rb_w32_spawnspec *actions = rb_w32_spawnspec_build(eargp);
     rb_pid_t pid;
     if (actions) {
         pid = rb_w32_uspawn_inherit(P_NOWAIT, (str), 0, CP_UTF8, actions);
-        rb_w32_spawn_actions_destroy(actions);
+        rb_w32_spawnspec_destroy(actions);
     }
     else {
         rb_sys_fail_str(eargp->chdir_dir);
@@ -2333,23 +2333,23 @@ check_exec_fds(struct rb_execarg *eargp)
  * never touches the CRT-internal fd details, which live entirely inside
  * win32.c.  fd_open is expanded into fd_dup2 earlier (rb_execarg_parent_start1),
  * so no extra handling is required here.  The returned object must be released
- * with rb_w32_spawn_actions_destroy.
+ * with rb_w32_spawnspec_destroy.
  */
-struct rb_w32_spawn_actions *
-rb_w32_build_spawn_actions(const struct rb_execarg *eargp)
+struct rb_w32_spawnspec *
+rb_w32_spawnspec_build(const struct rb_execarg *eargp)
 {
-    struct rb_w32_spawn_actions *actions = rb_w32_spawn_actions_init();
+    struct rb_w32_spawnspec *actions = rb_w32_spawnspec_init();
 
     /* close_others_do governs whether fds >= 3 that are not explicit redirect
      * targets are stripped from the lpReserved2 inherit table, matching the
      * Unix rb_close_before_exec(3, ...) step in rb_execarg_run_options. */
-    rb_w32_spawn_actions_set_close_others(actions, eargp->close_others_do);
+    rb_w32_spawnspec_set_close_others(actions, eargp->close_others_do);
 
     VALUE ary = eargp->fd_close;
     if (ary != Qfalse) {
         long n = RARRAY_LEN(ary), i;
         for (i = 0; i < n; i++)
-            rb_w32_spawn_actions_addclose(actions,
+            rb_w32_spawnspec_addclose(actions,
                 FIX2INT(RARRAY_AREF(RARRAY_AREF(ary, i), 0)));
     }
 
@@ -2358,7 +2358,7 @@ rb_w32_build_spawn_actions(const struct rb_execarg *eargp)
         long n = RARRAY_LEN(ary), i;
         for (i = 0; i < n; i++) {
             VALUE elt = RARRAY_AREF(ary, i);
-            rb_w32_spawn_actions_adddup2(actions,
+            rb_w32_spawnspec_adddup2(actions,
                 FIX2INT(RARRAY_AREF(elt, 1)), FIX2INT(RARRAY_AREF(elt, 0)));
         }
     }
@@ -2368,13 +2368,13 @@ rb_w32_build_spawn_actions(const struct rb_execarg *eargp)
         long n = RARRAY_LEN(ary), i;
         for (i = 0; i < n; i++) {
             VALUE elt = RARRAY_AREF(ary, i);
-            rb_w32_spawn_actions_adddup2_child(actions,
+            rb_w32_spawnspec_adddup2_child(actions,
                 FIX2INT(RARRAY_AREF(elt, 1)), FIX2INT(RARRAY_AREF(elt, 0)));
         }
     }
 
     /* Build the child environment from the spawn options and pass it to the
-     * child via CreateProcessW's lpEnvironment (see rb_w32_spawn_actions_addenv)
+     * child via CreateProcessW's lpEnvironment (see rb_w32_spawnspec_addenv)
      * instead of mutating this process's own environment.  This mirrors the
      * Unix path, which exec's the child with an explicit environ, and avoids
      * the parent-env corruption that ruby_setenv-based setup would cause.  When
@@ -2420,7 +2420,7 @@ rb_w32_build_spawn_actions(const struct rb_execarg *eargp)
                 p += strlen(p) + 1;
             }
             envp[idx] = NULL;
-            rb_w32_spawn_actions_addenv(actions, envp);
+            rb_w32_spawnspec_addenv(actions, envp);
             xfree(envp);
         }
     }
@@ -2428,12 +2428,12 @@ rb_w32_build_spawn_actions(const struct rb_execarg *eargp)
     /* Set the child's current directory from the :chdir spawn option, passing
      * it to CreateProcessW as lpCurrentDirectory.  When :chdir was not given
      * we leave cwd NULL so the child inherits this process's cwd.  On failure
-     * (e.g. a non-existent directory) rb_w32_spawn_actions_adddir sets errno,
+     * (e.g. a non-existent directory) rb_w32_spawnspec_adddir sets errno,
      * which we propagate by abandoning the actions and returning NULL. */
     if (eargp->chdir_given) {
-        if (rb_w32_spawn_actions_adddir(actions,
+        if (rb_w32_spawnspec_adddir(actions,
                                         StringValueCStr(eargp->chdir_dir)) < 0) {
-            rb_w32_spawn_actions_destroy(actions);
+            rb_w32_spawnspec_destroy(actions);
             return NULL;
         }
     }
@@ -3710,7 +3710,7 @@ rb_execarg_run_options(const struct rb_execarg *eargp, struct rb_execarg *sargp,
         }
 #if !defined(HAVE_WORKING_FORK) && !defined(_WIN32)
         /* On Windows the child's directory is supplied to CreateProcessW via
-         * lpCurrentDirectory (see rb_w32_spawn_actions_adddir), which resolves
+         * lpCurrentDirectory (see rb_w32_spawnspec_adddir), which resolves
          * the (possibly relative) path against this process's cwd at spawn
          * time; mutating this process's own cwd here would both change the
          * parent and re-base the relative path incorrectly.  Platforms without

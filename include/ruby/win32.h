@@ -333,29 +333,29 @@ extern rb_pid_t rb_w32_uaspawn_flags(int, const char *, char *const *, DWORD);
  * redirections only through the accessors below and pass the resulting
  * pointer to the spawn functions, so they never see the CRT-internal fd
  * details.  The struct layout is private to win32.c. */
-struct rb_w32_spawn_actions;
-extern struct rb_w32_spawn_actions *rb_w32_spawn_actions_init(void);
-extern void rb_w32_spawn_actions_destroy(struct rb_w32_spawn_actions *actions);
-extern void rb_w32_spawn_actions_addclose(struct rb_w32_spawn_actions *actions, int fd);
-extern void rb_w32_spawn_actions_adddup2(struct rb_w32_spawn_actions *actions,
+struct rb_w32_spawnspec;
+extern struct rb_w32_spawnspec *rb_w32_spawnspec_init(void);
+extern void rb_w32_spawnspec_destroy(struct rb_w32_spawnspec *actions);
+extern void rb_w32_spawnspec_addclose(struct rb_w32_spawnspec *actions, int fd);
+extern void rb_w32_spawnspec_adddup2(struct rb_w32_spawnspec *actions,
                                          int oldfd, int newfd);
-extern void rb_w32_spawn_actions_adddup2_child(struct rb_w32_spawn_actions *actions,
+extern void rb_w32_spawnspec_adddup2_child(struct rb_w32_spawnspec *actions,
                                                 int oldfd, int newfd);
-extern void rb_w32_spawn_actions_set_close_others(struct rb_w32_spawn_actions *actions,
+extern void rb_w32_spawnspec_set_close_others(struct rb_w32_spawnspec *actions,
                                                   int close_others_do);
-extern void rb_w32_spawn_actions_enable_pty(struct rb_w32_spawn_actions *actions,
+extern void rb_w32_spawnspec_enable_pty(struct rb_w32_spawnspec *actions,
                                             HANDLE hPseudoConsole);
-extern void rb_w32_spawn_actions_addenv(struct rb_w32_spawn_actions *actions,
+extern void rb_w32_spawnspec_addenv(struct rb_w32_spawnspec *actions,
                                         char *const *envp);
-extern int rb_w32_spawn_actions_adddir(struct rb_w32_spawn_actions *actions,
+extern int rb_w32_spawnspec_adddir(struct rb_w32_spawnspec *actions,
                                         const char *dir);
 
 extern rb_pid_t rb_w32_uaspawn_inherit(int mode, const char *prog, char *const *argv,
                                        DWORD flags, UINT cp,
-                                       const struct rb_w32_spawn_actions *actions);
+                                       const struct rb_w32_spawnspec *actions);
 extern rb_pid_t rb_w32_uspawn_inherit(int mode, const char *cmd, const char *prog,
                                       UINT cp,
-                                      const struct rb_w32_spawn_actions *actions);
+                                      const struct rb_w32_spawnspec *actions);
 #undef HAVE_KILL
 #define HAVE_KILL 1
 extern int kill(rb_pid_t, int);

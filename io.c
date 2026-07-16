@@ -7737,7 +7737,7 @@ pipe_open(VALUE execarg_obj, const char *modestr, enum rb_io_mode fmode,
         /* On Windows, spawn through the inherit-table path so that
          * close_on_exec = false fds (and any explicit fd_dup2 redirects
          * set up above) propagate to the child via lpReserved2. */
-        struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
+        struct rb_w32_spawnspec *actions = rb_w32_spawnspec_build(eargp);
         if (args) {
             pid = rb_w32_uaspawn_inherit(P_NOWAIT,
                                          cmd, args, 0, CP_UTF8, actions);
@@ -7746,7 +7746,7 @@ pipe_open(VALUE execarg_obj, const char *modestr, enum rb_io_mode fmode,
             pid = rb_w32_uspawn_inherit(P_NOWAIT, cmd, NULL,
                                         CP_UTF8, actions);
         }
-        rb_w32_spawn_actions_destroy(actions);
+        rb_w32_spawnspec_destroy(actions);
 #   else
         while ((pid = DO_SPAWN(cmd, args, envp)) < 0) {
             /* exec failed */

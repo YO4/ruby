@@ -105,8 +105,8 @@ RUBY_SYMBOL_EXPORT_END
  * win32.c to construct the lpReserved2 inherit table.  Used by both process.c
  * and io.c (pipe_open).  The struct is opaque (defined in win32.c); only a
  * forward declaration is needed here to keep this header portable. */
-struct rb_w32_spawn_actions;
-struct rb_w32_spawn_actions *rb_w32_build_spawn_actions(const struct rb_execarg *eargp);
+struct rb_w32_spawnspec;
+struct rb_w32_spawnspec *rb_w32_spawnspec_build(const struct rb_execarg *eargp);
 #endif
 
 /* argv_str contains extra two elements.
