@@ -343,6 +343,8 @@ extern void rb_w32_spawn_actions_adddup2_child(struct rb_w32_spawn_actions *acti
                                                 int oldfd, int newfd);
 extern void rb_w32_spawn_actions_set_close_others(struct rb_w32_spawn_actions *actions,
                                                   int close_others_do);
+extern void rb_w32_spawn_actions_enable_pty(struct rb_w32_spawn_actions *actions,
+                                            HANDLE hPseudoConsole);
 
 extern rb_pid_t rb_w32_uaspawn_inherit(int mode, const char *prog, char *const *argv,
                                        DWORD flags, UINT cp,
