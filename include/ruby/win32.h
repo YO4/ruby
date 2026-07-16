@@ -347,6 +347,8 @@ extern void rb_w32_spawn_actions_enable_pty(struct rb_w32_spawn_actions *actions
                                             HANDLE hPseudoConsole);
 extern void rb_w32_spawn_actions_addenv(struct rb_w32_spawn_actions *actions,
                                         char *const *envp);
+extern int rb_w32_spawn_actions_adddir(struct rb_w32_spawn_actions *actions,
+                                        const char *dir);
 
 extern rb_pid_t rb_w32_uaspawn_inherit(int mode, const char *prog, char *const *argv,
                                        DWORD flags, UINT cp,

@@ -1638,8 +1638,13 @@ proc_exec_cmd(const char *prog, VALUE argv_str, VALUE envp_str,
 #ifdef _WIN32
     if (eargp) {
         struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
-        rb_w32_uaspawn_inherit(P_OVERLAY, prog, argv, 0, CP_UTF8, actions);
-        rb_w32_spawn_actions_destroy(actions);
+        if (actions) {
+            rb_w32_uaspawn_inherit(P_OVERLAY, prog, argv, 0, CP_UTF8, actions);
+            rb_w32_spawn_actions_destroy(actions);
+        }
+        else {
+            rb_sys_fail_str(eargp->chdir_dir);
+        }
     }
     else {
         rb_w32_uaspawn(P_OVERLAY, prog, argv);
@@ -1675,8 +1680,13 @@ proc_exec_sh(const char *str, VALUE envp_str,
 #ifdef _WIN32
     if (eargp) {
         struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
-        rb_w32_uspawn_inherit(P_OVERLAY, (char *)str, 0, CP_UTF8, actions);
-        rb_w32_spawn_actions_destroy(actions);
+        if (actions) {
+            rb_w32_uspawn_inherit(P_OVERLAY, (char *)str, 0, CP_UTF8, actions);
+            rb_w32_spawn_actions_destroy(actions);
+        }
+        else {
+            rb_sys_fail_str(eargp->chdir_dir);
+        }
     }
     else {
         rb_w32_uspawn(P_OVERLAY, (char *)str, 0);
@@ -1807,10 +1817,15 @@ proc_spawn_cmd(char **argv, VALUE prog, struct rb_execarg *eargp)
             flags = CREATE_NEW_PROCESS_GROUP;
         }
         struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
-        pid = rb_w32_uaspawn_inherit(P_NOWAIT,
-                                     prog ? RSTRING_PTR(prog) : 0, argv,
-                                     flags, CP_UTF8, actions);
-        rb_w32_spawn_actions_destroy(actions);
+        if (actions) {
+            pid = rb_w32_uaspawn_inherit(P_NOWAIT,
+                                         prog ? RSTRING_PTR(prog) : 0, argv,
+                                         flags, CP_UTF8, actions);
+            rb_w32_spawn_actions_destroy(actions);
+        }
+        else {
+            rb_sys_fail_str(eargp->chdir_dir);
+        }
 #else
         pid = proc_spawn_cmd_internal(argv, prog ? RSTRING_PTR(prog) : 0);
 #endif
@@ -1824,8 +1839,13 @@ proc_spawn_sh(char *str, struct rb_execarg *eargp)
 {
     struct rb_w32_spawn_actions *actions = rb_w32_build_spawn_actions(eargp);
     rb_pid_t pid;
-    pid = rb_w32_uspawn_inherit(P_NOWAIT, (str), 0, CP_UTF8, actions);
-    rb_w32_spawn_actions_destroy(actions);
+    if (actions) {
+        pid = rb_w32_uspawn_inherit(P_NOWAIT, (str), 0, CP_UTF8, actions);
+        rb_w32_spawn_actions_destroy(actions);
+    }
+    else {
+        rb_sys_fail_str(eargp->chdir_dir);
+    }
     return pid;
 }
 #else
@@ -2402,6 +2422,19 @@ rb_w32_build_spawn_actions(const struct rb_execarg *eargp)
             envp[idx] = NULL;
             rb_w32_spawn_actions_addenv(actions, envp);
             xfree(envp);
+        }
+    }
+
+    /* Set the child's current directory from the :chdir spawn option, passing
+     * it to CreateProcessW as lpCurrentDirectory.  When :chdir was not given
+     * we leave cwd NULL so the child inherits this process's cwd.  On failure
+     * (e.g. a non-existent directory) rb_w32_spawn_actions_adddir sets errno,
+     * which we propagate by abandoning the actions and returning NULL. */
+    if (eargp->chdir_given) {
+        if (rb_w32_spawn_actions_adddir(actions,
+                                        StringValueCStr(eargp->chdir_dir)) < 0) {
+            rb_w32_spawn_actions_destroy(actions);
+            return NULL;
         }
     }
 
@@ -3675,10 +3708,18 @@ rb_execarg_run_options(const struct rb_execarg *eargp, struct rb_execarg *sargp,
             sargp->chdir_given = 1;
             sargp->chdir_dir = hide_obj(rb_dir_getwd_ospath());
         }
+#if !defined(HAVE_WORKING_FORK) && !defined(_WIN32)
+        /* On Windows the child's directory is supplied to CreateProcessW via
+         * lpCurrentDirectory (see rb_w32_spawn_actions_adddir), which resolves
+         * the (possibly relative) path against this process's cwd at spawn
+         * time; mutating this process's own cwd here would both change the
+         * parent and re-base the relative path incorrectly.  Platforms without
+         * fork let their spawn helpers handle the directory too. */
         if (chdir(RSTRING_PTR(eargp->chdir_dir)) == -1) { /* async-signal-safe */
             ERRMSG("chdir");
             return -1;
         }
+#endif
     }
 
 #ifdef HAVE_SETGID

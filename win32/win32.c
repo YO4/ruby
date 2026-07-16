@@ -1240,6 +1240,11 @@ struct rb_w32_spawn_actions {
      * d (matching the child's environment) rather than in this process's PATH.
      * Owned by this struct; freed by rb_w32_spawn_actions_destroy. */
     char *path_override;
+
+    /* UTF-16LE current directory passed to CreateProcessW as
+     * lpCurrentDirectory, or NULL to inherit this process's cwd.  Owned by
+     * this struct; freed by rb_w32_spawn_actions_destroy. */
+    WCHAR *cwd;
 };
 
 /* Shared inheritance state prepared from the spawn actions and consumed by
@@ -1286,6 +1291,11 @@ struct rb_w32_inherit_state {
      * mutating this process's own environment.  Not owned by this struct; it is
      * freed by rb_w32_spawn_actions_destroy. */
     const WCHAR *env_block;
+
+    /* UTF-16LE current directory supplied via rb_w32_spawn_actions_adddir, or
+     * NULL.  When non-NULL it is passed to CreateProcessW as lpCurrentDirectory.
+     * Not owned by this struct; it is freed by rb_w32_spawn_actions_destroy. */
+    const WCHAR *cwd;
 };
 
 /* Forward declarations: the inherit-state helpers are defined later, right
@@ -1424,7 +1434,7 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
     RUBY_CRITICAL {
         fRet = CreateProcessW(prog, (WCHAR *)cmd, &sa, &sa,
                               sa.bInheritHandle, dwCreationFlags,
-                              (LPWSTR)st.env_block, NULL,
+                               (LPWSTR)st.env_block, (LPWSTR)st.cwd,
                               attrlist ? &aStartupInfoEx.StartupInfo : &aStartupInfo,
                               &aProcessInformation);
         if (!fRet)
@@ -2901,6 +2911,7 @@ rb_w32_spawn_actions_destroy(struct rb_w32_spawn_actions *actions)
     if (actions->fd_dup2_child) xfree(actions->fd_dup2_child);
     if (actions->env_block) xfree(actions->env_block);
     if (actions->path_override) xfree(actions->path_override);
+    if (actions->cwd) xfree(actions->cwd);
     xfree(actions);
 }
 
@@ -3014,6 +3025,68 @@ rb_w32_spawn_actions_addenv(struct rb_w32_spawn_actions *actions,
     actions->env_block = block;
 
     FreeEnvironmentStringsW(os_env);
+}
+
+/* Set the child's current directory from a UTF-8 path.  dir is converted to
+ * UTF-16LE and resolved to a full path (relative to this process's current
+ * directory, which is the spawn option's base at call time) before being
+ * stored as actions->cwd, which CreateChild passes to CreateProcessW as
+ * lpCurrentDirectory.  Passing NULL dir resets the current directory to NULL
+ * (meaning "inherit this process's cwd").  The previous cwd (if any) is
+ * replaced and freed.  On failure errno is set and actions->cwd is left
+ * unchanged. */
+int
+rb_w32_spawn_actions_adddir(struct rb_w32_spawn_actions *actions,
+                            const char *dir)
+{
+    if (!actions) return -1;
+
+    if (actions->cwd) {
+        xfree(actions->cwd);
+        actions->cwd = NULL;
+    }
+    if (!dir) return 0;
+
+    WCHAR *w = utf8_to_wstr(dir, NULL);
+    if (!w) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    /* Resolve to an absolute path so CreateProcessW's lpCurrentDirectory sees a
+     * stable, fully-qualified directory regardless of any chdir this process
+     * performs afterwards.  GetFullPathNameW resolves relative to the current
+     * directory. */
+    DWORD need = GetFullPathNameW(w, 0, NULL, NULL);
+    if (need == 0) {
+        DWORD err = GetLastError();
+        xfree(w);
+        errno = map_errno(err);
+        return -1;
+    }
+    WCHAR *full = xmalloc((size_t)need * sizeof(WCHAR));
+    DWORD got = GetFullPathNameW(w, need, full, NULL);
+    xfree(w);
+    if (got == 0 || got > need) {
+        xfree(full);
+        errno = errno ? errno : EINVAL;
+        return -1;
+    }
+
+    /* Mirror the Unix chdir(2) semantics: a non-existent directory must fail
+     * the spawn with ENOENT rather than letting CreateProcessW report a less
+     * specific ERROR_DIRECTORY (ENOTDIR). */
+    DWORD attr = GetFileAttributesW(full);
+    if (attr == INVALID_FILE_ATTRIBUTES ||
+        !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        DWORD err = GetLastError();
+        xfree(full);
+        errno = (attr == INVALID_FILE_ATTRIBUTES && err == ERROR_DIRECTORY)
+                    ? ENOENT : map_errno(err);
+        return -1;
+    }
+    actions->cwd = full;
+    return 0;
 }
 
 static void
@@ -3366,6 +3439,11 @@ prepare_inherit_state(const struct rb_w32_spawn_actions *actions,
      * CreateProcessW as lpEnvironment.  NULL means "inherit the parent process
      * environment" (lpEnvironment == NULL). */
     st->env_block = actions ? actions->env_block : NULL;
+
+    /* Carry the current directory (if any) into st so CreateChild passes it to
+     * CreateProcessW as lpCurrentDirectory.  NULL means "inherit this
+     * process's cwd" (lpCurrentDirectory == NULL). */
+    st->cwd = actions ? actions->cwd : NULL;
 
     /* lpReserved2: the child's CRT reads it back to discover which fds/handles
      * to inherit.  See make_lpReserved2 for the buffer layout.  NULL with
