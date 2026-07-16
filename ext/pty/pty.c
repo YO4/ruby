@@ -12,7 +12,9 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#if !defined(_WIN32)
 #include <sys/file.h>
+#endif
 #include <fcntl.h>
 
 #ifdef HAVE_PWD_H
@@ -36,7 +38,6 @@
 #endif
 
 #if defined(HAVE_SYS_PARAM_H)
- /* for __FreeBSD_version */
 # include <sys/param.h>
 #endif
 
@@ -59,6 +60,13 @@
 #include "internal/signal.h"
 #include "ruby/io.h"
 #include "ruby/util.h"
+#include "ruby/st.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#include <wincon.h>
+#include <io.h>
+#endif
 
 #define	DEVICELEN	16
 
@@ -90,6 +98,7 @@ struct pty_info {
     rb_pid_t child_pid;
 };
 
+#if !defined(_WIN32)
 static void getDevice(int*, int*, char [DEVICELEN], int);
 
 static int start_new_session(char *errbuf, size_t errbuf_len);
@@ -514,6 +523,85 @@ getDevice(int *master, int *slave, char SlaveName[DEVICELEN], int nomesg)
         get_device_once(master, slave, SlaveName, nomesg, 1);
     }
 }
+#else /* _WIN32 */
+/* Windows pseudo-console (conpty) support.
+ *
+ * A Windows child is attached to a pseudoconsole via
+ * PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE (installed by win32.c from the
+ * rb_w32_spawn_actions enabled with rb_w32_spawn_actions_enable_pty).  The
+ * master communicates with the conpty through two anonymous pipes: one for
+ * input and one for output.  The "conpty-side" ends of those pipes are handed
+ * to CreatePseudoConsole (which dups them into conhost), while the "master-side"
+ * ends stay in this process and are exposed to Ruby as the readable/writable IOs
+ * returned by PTY.spawn. */
+
+typedef HRESULT (WINAPI *PFN_CreatePseudoConsole)(COORD size, HANDLE hInput,
+                                                  HANDLE hOutput, DWORD dwFlags,
+                                                  HANDLE *phPC);
+typedef void (WINAPI *PFN_ClosePseudoConsole)(HANDLE hPC);
+
+static PFN_CreatePseudoConsole pCreatePseudoConsole;
+static PFN_ClosePseudoConsole pClosePseudoConsole;
+static int conpty_resolved = 0;
+
+static void
+resolve_conpty(void)
+{
+    HMODULE h = GetModuleHandleA("kernel32.dll");
+    if (h) {
+        pCreatePseudoConsole =
+            (PFN_CreatePseudoConsole)GetProcAddress(h, "CreatePseudoConsole");
+        pClosePseudoConsole =
+            (PFN_ClosePseudoConsole)GetProcAddress(h, "ClosePseudoConsole");
+    }
+    conpty_resolved = 1;
+}
+
+/* Size of the pseudoconsole: mirror the size of our own console if we have
+ * one, otherwise fall back to 80 columns x 25 rows. */
+static void
+get_console_size(COORD *size)
+{
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (h != INVALID_HANDLE_VALUE &&
+        GetConsoleScreenBufferInfo(h, &csbi) &&
+        csbi.dwSize.X > 0 && csbi.dwSize.Y > 0) {
+        size->X = csbi.dwSize.X;
+        size->Y = csbi.dwSize.Y;
+    }
+    else {
+        size->X = 80;
+        size->Y = 25;
+    }
+}
+
+/* Registry of pseudoconsole handles keyed by child pid, so the handle can be
+ * released once the child has exited (closing it terminates the backing
+ * conhost session).  The conpty-side pipe ends are dup'ed into conhost at
+ * CreatePseudoConsole time and the parent's copies are closed immediately, so
+ * only the pseudoconsole handle needs tracking here. */
+static st_table *pty_console_table;
+
+static void
+pty_console_register(rb_pid_t pid, HANDLE hPC)
+{
+    if (!pty_console_table)
+        pty_console_table = st_init_numtable();
+    st_insert(pty_console_table, (st_data_t)pid, (st_data_t)hPC);
+}
+
+static void
+pty_console_reap(rb_pid_t pid)
+{
+    st_data_t hPC;
+    if (pty_console_table &&
+        st_delete(pty_console_table, (st_data_t *)&pid, &hPC)) {
+        if (pClosePseudoConsole)
+            pClosePseudoConsole((HANDLE)hPC);
+    }
+}
+#endif /* _WIN32 */
 
 static VALUE
 pty_close_pty(VALUE assoc)
@@ -574,6 +662,7 @@ pty_close_pty(VALUE assoc)
 static VALUE
 pty_open(VALUE klass)
 {
+#if !defined(_WIN32)
     int master_fd, slave_fd;
     char slavename[DEVICELEN];
 
@@ -592,6 +681,10 @@ pty_open(VALUE klass)
     }
 
     return assoc;
+#else
+    rb_notimplement();
+    return Qnil;
+#endif
 }
 
 static VALUE
@@ -662,6 +755,7 @@ pty_detach_process(VALUE v)
 static VALUE
 pty_getpty(int argc, VALUE *argv, VALUE self)
 {
+#if !defined(_WIN32)
     VALUE res;
     struct pty_info info;
     char SlaveName[DEVICELEN];
@@ -681,6 +775,144 @@ pty_getpty(int argc, VALUE *argv, VALUE self)
         rb_cFile, wpty_fd, FMODE_WRITABLE | FMODE_TRUNC | FMODE_CREATE | FMODE_SYNC,
         pty_path, RUBY_IO_TIMEOUT_DEFAULT, NULL
     );
+
+#else /* _WIN32 */
+    VALUE res;
+    struct pty_info info;
+    rb_pid_t pid = -1;
+    /* ConPTY requires two anonymous, inheritable pipes created with CreatePipe.
+     * The "conpty-side" ends (hInputRead, hOutputWrite) are handed to
+     * CreatePseudoConsole; the "master-side" ends (master_in_fd, master_out_fd)
+     * stay in this process and are exposed to Ruby. */
+    HANDLE hInputRead = NULL, hInputWrite = NULL;
+    HANDLE hOutputRead = NULL, hOutputWrite = NULL;
+    HANDLE hInput = NULL, hOutput = NULL;
+    HANDLE hPC = NULL;
+    int master_in_fd = -1;       /* parent writes here; child reads via conpty */
+    int master_out_fd = -1;      /* parent reads here; child writes via conpty */
+    COORD size;
+    char errbuf[32];
+    VALUE execarg_obj;
+    struct rb_execarg *eargp;
+    struct rb_execarg sarg;
+    struct rb_w32_spawn_actions *actions = NULL;
+
+    if (!conpty_resolved)
+        resolve_conpty();
+    if (!pCreatePseudoConsole || !pClosePseudoConsole) {
+        rb_raise(rb_eNotImpError,
+                 "PTY is not supported on this version of Windows");
+    }
+
+    get_console_size(&size);
+
+    /* The conpty pipes are created non-inheritable, exactly like the ConPTY
+     * EchoCon sample (CreatePipe(..., NULL, 0)).  CreatePseudoConsole dup's the
+     * conpty-side ends into conhost, so inheritable handles are neither required
+     * nor desired; making them inheritable prevents the child from attaching to
+     * the pseudoconsole. */
+    if (!CreatePipe(&hInputRead, &hInputWrite, NULL, 0)) {
+        rb_sys_fail("CreatePipe");
+    }
+    if (!CreatePipe(&hOutputRead, &hOutputWrite, NULL, 0)) {
+        CloseHandle(hInputRead);
+        CloseHandle(hInputWrite);
+        rb_sys_fail("CreatePipe");
+    }
+
+    hInput = hInputRead;
+    hOutput = hOutputWrite;
+
+    if (FAILED(pCreatePseudoConsole(size, hInput, hOutput, 0, &hPC))) {
+        CloseHandle(hInputRead);
+        CloseHandle(hInputWrite);
+        CloseHandle(hOutputRead);
+        CloseHandle(hOutputWrite);
+        rb_raise(rb_eRuntimeError, "CreatePseudoConsole failed");
+    }
+
+    /* The conpty-side ends are dup'ed into conhost at CreatePseudoConsole time,
+     * so the parent's copies can be released now (per the ConPTY EchoCon
+     * sample).  Closing them here is what lets the child actually attach to the
+     * pseudoconsole; leaving them inheritable/open makes the child inherit this
+     * process's console instead.  The master-side ends stay in this process. */
+    CloseHandle(hInputRead);
+    CloseHandle(hOutputWrite);
+
+    master_in_fd = _open_osfhandle((intptr_t)hInputWrite, O_WRONLY);
+    if (master_in_fd < 0) {
+        pClosePseudoConsole(hPC);
+        CloseHandle(hInputWrite);
+        CloseHandle(hOutputRead);
+        rb_sys_fail("_open_osfhandle");
+    }
+    master_out_fd = _open_osfhandle((intptr_t)hOutputRead, O_RDONLY);
+    if (master_out_fd < 0) {
+        close(master_in_fd);
+        pClosePseudoConsole(hPC);
+        CloseHandle(hInputWrite);
+        CloseHandle(hOutputRead);
+        rb_sys_fail("_open_osfhandle");
+    }
+
+    execarg_obj = rb_execarg_new(argc, argv, 1, 0);
+    rb_execarg_parent_start(execarg_obj);
+    eargp = rb_execarg_get(execarg_obj);
+
+    actions = rb_w32_build_spawn_actions(eargp);
+    rb_w32_spawn_actions_enable_pty(actions, hPC);
+
+    MEMZERO(&sarg, struct rb_execarg, 1);
+    if (rb_execarg_run_options(eargp, &sarg, errbuf, sizeof(errbuf)) < 0) {
+        rb_w32_spawn_actions_destroy(actions);
+        rb_execarg_parent_end(execarg_obj);
+        close(master_in_fd);
+        close(master_out_fd);
+        pClosePseudoConsole(hPC);
+        rb_sys_fail(errbuf[0] ? errbuf : "spawn failed");
+    }
+
+    VALUE progv = eargp->use_shell ? eargp->invoke.sh.shell_script
+                                    : eargp->invoke.cmd.command_name;
+    if (progv && !eargp->use_shell) {
+        /* keep argv[0] consistent with prog, as process.c does */
+        char **argvp = ARGVSTR2ARGV(eargp->invoke.cmd.argv_str);
+        argvp[0] = RSTRING_PTR(progv);
+    }
+
+    if (eargp->use_shell) {
+        pid = rb_w32_uspawn_inherit(P_NOWAIT,
+                                    RSTRING_PTR(progv), 0, CP_UTF8, actions);
+    }
+    else {
+        char **argvp = ARGVSTR2ARGV(eargp->invoke.cmd.argv_str);
+        pid = rb_w32_uaspawn_inherit(P_NOWAIT,
+                                     progv ? RSTRING_PTR(progv) : 0,
+                                     argvp, 0, CP_UTF8, actions);
+    }
+
+    rb_execarg_parent_end(execarg_obj);
+    rb_w32_spawn_actions_destroy(actions);
+
+    if (pid < 0) {
+        close(master_in_fd);
+        close(master_out_fd);
+        pClosePseudoConsole(hPC);
+        rb_sys_fail("spawn failed");
+    }
+
+    pty_console_register(pid, hPC);
+
+    info.child_pid = pid;
+    info.fd = master_out_fd;
+
+    VALUE pty_path = rb_obj_freeze(rb_str_new_cstr("conpty"));
+    VALUE rport = rb_io_open_descriptor(
+        rb_cFile, master_out_fd, FMODE_READABLE, pty_path, RUBY_IO_TIMEOUT_DEFAULT, NULL);
+    VALUE wport = rb_io_open_descriptor(
+        rb_cFile, master_in_fd, FMODE_WRITABLE | FMODE_TRUNC | FMODE_CREATE | FMODE_SYNC,
+        pty_path, RUBY_IO_TIMEOUT_DEFAULT, NULL);
+#endif
 
     res = rb_ary_new2(3);
     rb_ary_store(res, 0, rport);
@@ -703,15 +935,12 @@ raise_from_check(rb_pid_t pid, int status)
     VALUE exc;
 
 #if defined(WIFSTOPPED)
-#elif defined(IF_STOPPED)
-#define WIFSTOPPED(status) IF_STOPPED(status)
-#else
----->> Either IF_STOPPED or WIFSTOPPED is needed <<----
-#endif /* WIFSTOPPED | IF_STOPPED */
     if (WIFSTOPPED(status)) { /* suspend */
         state = "stopped";
     }
-    else if (kill(pid, 0) == 0) {
+    else
+#endif
+    if (kill(pid, 0) == 0) {
         state = "changed";
     }
     else {
@@ -758,6 +987,10 @@ pty_check(int argc, VALUE *argv, VALUE self)
     rb_scan_args(argc, argv, "11", &pid, &exc);
     cpid = rb_waitpid(NUM2PIDT(pid), &status, flag);
     if (cpid == -1 || cpid == 0) return Qnil;
+
+#ifdef _WIN32
+    pty_console_reap(cpid);
+#endif
 
     if (!RTEST(exc)) return rb_last_status_get();
     raise_from_check(cpid, status);
