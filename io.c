@@ -515,16 +515,8 @@ rb_cloexec_fcntl_dupfd(int fd, int minfd)
 #define READ_CHAR_PENDING_COUNT(fptr) ((fptr)->cbuf.len)
 #define READ_CHAR_PENDING_PTR(fptr) ((fptr)->cbuf.ptr+(fptr)->cbuf.off)
 
-#if defined(_WIN32)
-#define WAIT_FD_IN_WIN32(fptr) \
-    (rb_w32_io_cancelable_p((fptr)->fd) ? Qnil : rb_io_wait(fptr->self, RB_INT2NUM(RUBY_IO_READABLE), RUBY_IO_TIMEOUT_DEFAULT))
-#else
-#define WAIT_FD_IN_WIN32(fptr)
-#endif
-
 #define READ_CHECK(fptr) do {\
     if (!READ_DATA_PENDING(fptr)) {\
-        WAIT_FD_IN_WIN32(fptr);\
         rb_io_check_closed(fptr);\
     }\
 } while(0)

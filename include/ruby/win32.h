@@ -263,7 +263,6 @@ struct ifaddrs {
 
 extern void   rb_w32_sysinit(int *, char ***);
 extern int    flock(int fd, int oper);
-extern int    rb_w32_io_cancelable_p(int);
 extern int    rb_w32_is_socket(int);
 extern int    WSAAPI rb_w32_accept(int, struct sockaddr *, int *);
 extern int    WSAAPI rb_w32_bind(int, const struct sockaddr *, int);

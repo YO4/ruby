@@ -26,6 +26,7 @@
  * - MSVCRT_VERSION: 140
  */
 #include "ruby/ruby.h"
+#include "ruby/atomic.h"
 #include "ruby/encoding.h"
 #include "ruby/io.h"
 #include "ruby/util.h"
@@ -678,6 +679,47 @@ free_conlist(st_data_t key, st_data_t val, st_data_t arg)
     return ST_DELETE;
 }
 
+static CRITICAL_SECTION conin_mutex;
+enum { CONIN_INCOMPLETE = 0, CONIN_COMPLETE = 1, CONIN_FAILURE = -1 };
+struct conin_edit {
+    volatile int interrupted;
+    int state;
+    WCHAR *wbuf;
+    size_t wcap;
+    size_t wlen;   /* total chars in wbuf */
+    size_t wecho;  /* chars index to be displayed */
+    char *mbuf;
+    size_t mblen, mbpos;
+    LONG saved_interrupt_count;
+};
+static struct conin_edit conin_edit = {0};
+
+#ifndef CONSOLE_READ_NOREMOVE
+#define CONSOLE_READ_NOREMOVE 0x0001
+#endif
+#ifndef CONSOLE_READ_NOWAIT
+#define CONSOLE_READ_NOWAIT   0x0002
+#endif
+typedef BOOL (WINAPI *ReadConsoleInputExW_func)(HANDLE, PINPUT_RECORD, DWORD, LPDWORD, USHORT);
+static ReadConsoleInputExW_func pReadConsoleInputExW = NULL;
+
+static rb_atomic_t console_interrupt_count = 0;
+static BOOL WINAPI ConsoleCtrlHandler(DWORD fdwCtrlType);
+
+/* License: Ruby's */
+static void
+console_start_interrupt_check(void)
+{
+    conin_edit.saved_interrupt_count = console_interrupt_count;
+}
+
+/* License: Ruby's */
+static BOOL
+console_check_interrupt(void)
+{
+    return conin_edit.saved_interrupt_count != console_interrupt_count;
+}
+
 /* License: Ruby's */
 static void
 constat_delete(HANDLE h)
@@ -699,6 +741,7 @@ exit_handler(void)
     DeleteCriticalSection(&select_mutex);
     DeleteCriticalSection(&socklist_mutex);
     DeleteCriticalSection(&conlist_mutex);
+    DeleteCriticalSection(&conin_mutex);
     thread_exclusive(uenvarea) {
         if (uenvarea) {
             free(uenvarea);
@@ -768,6 +811,11 @@ StartSockets(void)
     InitializeCriticalSection(&select_mutex);
     InitializeCriticalSection(&socklist_mutex);
     InitializeCriticalSection(&conlist_mutex);
+    InitializeCriticalSection(&conin_mutex);
+
+    pReadConsoleInputExW = (ReadConsoleInputExW_func)
+        get_proc_address("kernel32", "ReadConsoleInputExW", NULL);
+    SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
     atexit(exit_handler);
 }
@@ -2625,16 +2673,6 @@ _pioinfo(int fd)
 #define FDEV			0x40	/* file handle refers to device */
 #define FTEXT			0x80	/* file handle is in text mode */
 
-static int is_socket(SOCKET);
-static int is_console(SOCKET);
-
-/* License: Ruby's */
-int
-rb_w32_io_cancelable_p(int fd)
-{
-    return is_socket(TO_SOCKET(fd)) || !is_console(TO_SOCKET(fd));
-}
-
 /* License: Ruby's */
 static int
 rb_w32_open_osfhandle(intptr_t osfhandle, int flags)
@@ -3049,31 +3087,18 @@ is_console(SOCKET sock) /* DONT call this for SOCKET! */
     return ret;
 }
 
+static HANDLE conout_ensure(void);
+static int conin_read_keys(HANDLE in, HANDLE out);
+
 /* License: Ruby's */
 static int
 is_readable_console(SOCKET sock) /* call this for console only */
 {
     int ret = 0;
-    DWORD n = 0;
-    INPUT_RECORD ir;
 
-    RUBY_CRITICAL {
-        if (PeekConsoleInputW((HANDLE)sock, &ir, 1, &n) && n > 0) {
-            if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown &&
-                ir.Event.KeyEvent.uChar.UnicodeChar) {
-                ret = 1;
-            }
-            else if (ir.EventType == KEY_EVENT && !ir.Event.KeyEvent.bKeyDown &&
-                ir.Event.KeyEvent.wVirtualKeyCode == VK_MENU /* ALT key */ &&
-                ir.Event.KeyEvent.uChar.UnicodeChar) {
-                ret = 1;
-            }
-            else {
-                ReadConsoleInputW((HANDLE)sock, &ir, 1, &n);
-            }
-        }
-    }
-
+    EnterCriticalSection(&conin_mutex);
+    ret = (conin_read_keys((HANDLE)sock, conout_ensure()) == CONIN_COMPLETE);
+    LeaveCriticalSection(&conin_mutex);
     return ret;
 }
 
@@ -3216,6 +3241,7 @@ rb_w32_select_with_thread(int nfds, fd_set *rd, fd_set *wr, fd_set *ex,
 
     rb_fd_init(&cons_rd);
     extract_fd(&cons_rd, else_rd.fdset, is_console); // ditto
+    console_start_interrupt_check();
 
     rb_fd_init(&except);
     extract_fd(&except, ex, is_not_socket); // drop only
@@ -7107,6 +7133,223 @@ constat_parse(HANDLE h, struct constat *s, const WCHAR **ptrp, long *lenp)
     return len;
 }
 
+static HANDLE conout = INVALID_HANDLE_VALUE;
+static const DWORD CONIN_WAIT = 10;
+DWORD rb_w32_write_console_wstr(HANDLE handle, const WCHAR *ptr, long len, DWORD mode);
+
+/* License: Ruby's */
+static void
+invalidate_conout(void)
+{
+    if (conout != INVALID_HANDLE_VALUE) {
+        CloseHandle(conout);
+        conout = INVALID_HANDLE_VALUE;
+    }
+}
+
+/* License: Ruby's */
+static HANDLE
+conout_ensure(void)
+{
+    if (conout == INVALID_HANDLE_VALUE)
+        conout = open_special(L"CONOUT$", GENERIC_READ | GENERIC_WRITE, 0);
+    return conout;
+}
+
+/* License: Ruby's */
+static void
+conin_reset(void)
+{
+    conin_edit.wlen = 0;
+    conin_edit.wecho = 0;
+    conin_edit.mblen = 0;
+    conin_edit.mbpos = 0;
+    conin_edit.state = CONIN_INCOMPLETE;
+}
+
+/* License: Ruby's */
+static BOOL WINAPI
+ConsoleCtrlHandler(DWORD fdwCtrlType)
+{
+    switch (fdwCtrlType)
+    {
+        // Handle the CTRL-C signal.
+    case CTRL_C_EVENT:
+        RUBY_ATOMIC_INC(console_interrupt_count);
+        return FALSE;
+    default:
+        return FALSE;
+    }
+}
+
+/* License: Ruby's */
+static int
+conin_line_edit(WCHAR c, HANDLE out, DWORD mode)
+{
+    struct conin_edit *e = &conin_edit;
+
+    if (c == '\r') {
+        e->wbuf[e->wlen++] = L'\n';
+        if (out) {
+            rb_w32_write_console_wstr(out, e->wbuf + e->wecho, e->wlen - e->wecho, mode);
+            e->wecho = e->wlen;
+        }
+        return 1;
+    }
+    if (c == '\b') {
+        if (e->wlen > 0) {
+            e->wlen--;
+            if (e->wecho > e->wlen) e->wecho = e->wlen;
+            if (out) rb_w32_write_console_wstr(out, L"\b \b", 3, mode);
+        }
+        return 0;
+    }
+    if (c == 'D' - '@') {
+        return 1;
+    }
+    return 0;
+}
+
+/* License: Ruby's */
+static int
+conin_read_keys(HANDLE in, HANDLE out)
+{
+    DWORD mode;
+    DWORD output_mode = 0;
+    HANDLE echo_out = NULL;
+    struct conin_edit *e = &conin_edit;
+    BOOL line_input;
+    BOOL interrupted = FALSE;
+
+    if (e->state == CONIN_COMPLETE) return e->state; /* already completed; wait for consume */
+    if (!GetConsoleMode(in, &mode)) {
+        errno = EBADF;
+        return CONIN_FAILURE;
+    }
+    line_input = !!(mode & ENABLE_LINE_INPUT);
+    if (line_input && (mode & ENABLE_ECHO_INPUT) &&
+        GetConsoleMode(out, &output_mode)) {
+        echo_out = out;
+    }
+    if (!pReadConsoleInputExW) {
+        errno = map_errno(GetLastError());
+        return CONIN_FAILURE;
+    }
+
+    while (!(interrupted = console_check_interrupt())) {
+        INPUT_RECORD ir;
+        DWORD n = 0;
+        KEY_EVENT_RECORD *ke;
+        WCHAR c;
+
+        if (!pReadConsoleInputExW(in, &ir, 1, &n, CONSOLE_READ_NOWAIT) || n == 0) {
+            interrupted = console_check_interrupt();
+            break;
+        }
+        if (ir.EventType != KEY_EVENT) continue;
+        ke = &ir.Event.KeyEvent;
+        if (!ke->bKeyDown) {
+            if (!(ke->wVirtualKeyCode == VK_MENU && ke->uChar.UnicodeChar)) {
+               continue;
+            }
+        }
+        c = ke->uChar.UnicodeChar;
+        if (c == 0) continue; /* non-character key (e.g. arrow keys) */
+
+        if (e->wlen + 1 > e->wcap && e->wcap < 32768) {
+            size_t ncap = e->wcap ? e->wcap * 2 : 4096;
+            WCHAR *nb = (WCHAR *)realloc(e->wbuf, ncap * sizeof(WCHAR));
+            if (!nb) {
+                errno = map_errno(GetLastError());
+                return CONIN_FAILURE;
+            }
+            e->wbuf = nb;
+            e->wcap = ncap;
+        }
+
+        if (mode & ENABLE_LINE_INPUT) {
+            if (c < ' ') {
+                if (conin_line_edit(c, echo_out, output_mode)) {
+                    e->state = CONIN_COMPLETE;
+                    break;
+                }
+            }
+            else if (e->wlen < e->wcap - 1) {
+                e->wbuf[e->wlen++] = c;
+            }
+        }
+        else {
+            e->wbuf[e->wlen++] = c;
+            e->state = CONIN_COMPLETE;
+            if (e->wlen == e->wcap) break;
+        }
+    }
+
+    if (interrupted) {
+        FlushConsoleInputBuffer(in);
+        conin_reset();
+        errno = EINTR;
+        return CONIN_FAILURE;
+    }
+    if (e->wecho != e->wlen && echo_out) {
+        rb_w32_write_console_wstr(echo_out, e->wbuf + e->wecho, e->wlen - e->wecho, output_mode);
+        e->wecho = e->wlen;
+    }
+    if (e->state == CONIN_COMPLETE) {
+        long mblen = 0;
+        if (e->mbuf) free(e->mbuf);
+        e->mbuf = NULL;
+        if (e->wlen > 0) {
+            e->mbuf = rb_w32_wstr_to_mbstr(CP_UTF8, e->wbuf, (int)e->wlen, &mblen);
+        }
+        e->mblen = (size_t)mblen;
+        e->mbpos = 0;
+    }
+    return e->state;
+}
+
+/* License: Ruby's */
+static ssize_t
+rb_w32_read_console(int fd, void *buf, size_t size)
+{
+    HANDLE in = (HANDLE)_get_osfhandle(fd);
+    struct conin_edit *e = &conin_edit;
+
+    console_start_interrupt_check();
+    EnterCriticalSection(&conin_mutex);
+    for (;;) {
+        if (e->state == CONIN_COMPLETE) {
+            if (e->mblen == 0) {
+                conin_reset();
+                LeaveCriticalSection(&conin_mutex);
+                return 0;
+            }
+            else {
+                size_t avail = e->mblen - e->mbpos;
+                size_t n = avail < size ? avail : size;
+                memcpy(buf, e->mbuf + e->mbpos, n);
+                e->mbpos += n;
+                if (e->mbpos >= e->mblen) conin_reset();
+                LeaveCriticalSection(&conin_mutex);
+                return (ssize_t)n;
+            }
+        }
+        if (conin_read_keys(in, conout_ensure()) == CONIN_FAILURE) {
+            LeaveCriticalSection(&conin_mutex);
+            return -1;
+        }
+        if (e->state == CONIN_COMPLETE) continue; /* no need to wait */
+        LeaveCriticalSection(&conin_mutex);
+        {
+            DWORD wait = rb_w32_wait_events_blocking(&in, 1, CONIN_WAIT);
+            if (wait == (DWORD)(WAIT_OBJECT_0 + 1)) {
+                errno = EINTR;
+                return -1;
+            }
+        }
+        EnterCriticalSection(&conin_mutex);
+    }
+}
 
 /* License: Ruby's */
 int
@@ -7232,6 +7475,14 @@ rb_w32_read_internal(int fd, void *buf, size_t size, rb_off_t *offset)
     // validate fd by using _get_osfhandle() because we cannot access _nhandle
     if (_get_osfhandle(fd) == -1) {
         return -1;
+    }
+
+    if (is_console(sock)) {
+        ssize_t r;
+        rb_acrt_lowio_lock_fh(fd);
+        r = rb_w32_read_console(fd, buf, size);
+        rb_acrt_lowio_unlock_fh(fd);
+        return r;
     }
 
     if (!offset && _osfile(fd) & FTEXT) {
@@ -7472,16 +7723,13 @@ rb_w32_write_console(uintptr_t strarg, int fd)
     VALUE str = strarg;
     int encindex;
     WCHAR *wbuffer = 0;
-    const WCHAR *ptr, *next;
-    struct constat *s;
+    const WCHAR *ptr;
     long len;
 
     handle = (HANDLE)_osfhnd(fd);
     if (!GetConsoleMode(handle, &dwMode))
         return -1L;
 
-    s = constat_handle(handle);
-    if (!s) return -1L;
     encindex = ENCODING_GET(str);
     switch (encindex) {
       default:
@@ -7502,12 +7750,27 @@ rb_w32_write_console(uintptr_t strarg, int fd)
         len = RSTRING_LEN(str) / sizeof(WCHAR);
         break;
     }
-    reslen = 0;
-    if (dwMode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
+    reslen = rb_w32_write_console_wstr(handle, ptr, len, dwMode);
+    RB_GC_GUARD(str);
+    free(wbuffer);
+    return (long)reslen;
+}
+
+/* License: Ruby's */
+DWORD
+rb_w32_write_console_wstr(HANDLE handle, const WCHAR *ptr, long len, DWORD mode)
+{
+    DWORD reslen = 0;
+
+    if (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
         if (!WriteConsoleW(handle, ptr, len, &reslen, NULL))
             reslen = (DWORD)-1L;
     }
     else {
+        const WCHAR *next;
+        struct constat *s = constat_handle(handle);
+
+        if (!s) return -1L;
         while (len > 0) {
             long curlen = constat_parse(handle, s, (next = ptr, &next), &len);
             reslen += next - ptr;
@@ -7521,9 +7784,7 @@ rb_w32_write_console(uintptr_t strarg, int fd)
             ptr = next;
         }
     }
-    RB_GC_GUARD(str);
-    free(wbuffer);
-    return (long)reslen;
+    return reslen;
 }
 
 /* License: Ruby's */
