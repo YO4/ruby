@@ -2654,7 +2654,7 @@ fptr_wait_readable(rb_io_t *fptr)
 }
 
 static int
-io_fillbuf(rb_io_t *fptr)
+io_fill_rbuf(rb_io_t *fptr, bool append)
 {
     ssize_t r;
 
@@ -2664,9 +2664,12 @@ io_fillbuf(rb_io_t *fptr)
         fptr->rbuf.capa = IO_RBUF_CAPA_FOR(fptr);
         fptr->rbuf.ptr = ALLOC_N(char, fptr->rbuf.capa);
     }
-    if (fptr->rbuf.len == 0) {
+    RUBY_ASSERT(!append || fptr->rbuf.off == 0);
+    RUBY_ASSERT(!append || fptr->rbuf.len < fptr->rbuf.capa);
+    if (fptr->rbuf.len == 0 || append) {
       retry:
-        r = rb_io_read_memory(fptr, fptr->rbuf.ptr, fptr->rbuf.capa);
+        r = rb_io_read_memory(fptr, fptr->rbuf.ptr + fptr->rbuf.len,
+            fptr->rbuf.capa - fptr->rbuf.len);
 
         if (r < 0) {
             if (fptr_wait_readable(fptr))
@@ -2682,11 +2685,17 @@ io_fillbuf(rb_io_t *fptr)
         }
         if (r > 0) rb_io_check_closed(fptr);
         fptr->rbuf.off = 0;
-        fptr->rbuf.len = (int)r; /* r should be <= rbuf_capa */
+        fptr->rbuf.len += (int)r; /* len should be <= rbuf_capa */
         if (r == 0)
             return -1; /* EOF */
     }
     return 0;
+}
+
+static int
+io_fillbuf(rb_io_t *fptr)
+{
+    return io_fill_rbuf(fptr, false);
 }
 
 /*
