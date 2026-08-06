@@ -78,10 +78,13 @@ struct rb_io {
     rb_econv_t *readconv;
 
     /**
-     * rb_io_ungetc()  destination.   This  buffer   is  read  before  checking
-     * ::rb_io_t::rbuf
+     * (Character)  read  buffer.  Only used when encoding converter is active.
+     * This buffer is read before checking ::rb_io_t::rbuf
      */
     rb_io_buffer_t cbuf;
+
+    /** Boundary of ungotten characters in cbuf */
+    int cbuf_off_unget;
 
     /** Encoding converter used when writing to this IO. */
     rb_econv_t *writeconv;
