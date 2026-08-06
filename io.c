@@ -2653,7 +2653,7 @@ fptr_wait_readable(rb_io_t *fptr)
 }
 
 static int
-io_fillbuf(rb_io_t *fptr)
+io_fillbuf(rb_io_t *fptr, bool read_more)
 {
     ssize_t r;
 
@@ -2663,9 +2663,9 @@ io_fillbuf(rb_io_t *fptr)
         fptr->rbuf.capa = IO_RBUF_CAPA_FOR(fptr);
         fptr->rbuf.ptr = ALLOC_N(char, fptr->rbuf.capa);
     }
-    if (fptr->rbuf.len == 0) {
+    if (fptr->rbuf.len == 0 || (read_more && fptr->rbuf.off == 0)) {
       retry:
-        r = rb_io_read_memory(fptr, fptr->rbuf.ptr, fptr->rbuf.capa);
+        r = rb_io_read_memory(fptr, fptr->rbuf.ptr + fptr->rbuf.len, fptr->rbuf.capa - fptr->rbuf.len);
 
         if (r < 0) {
             if (fptr_wait_readable(fptr))
@@ -2681,7 +2681,7 @@ io_fillbuf(rb_io_t *fptr)
         }
         if (r > 0) rb_io_check_closed(fptr);
         fptr->rbuf.off = 0;
-        fptr->rbuf.len = (int)r; /* r should be <= rbuf_capa */
+        fptr->rbuf.len += (int)r; /* len should be <= rbuf_capa */
         if (r == 0)
             return -1; /* EOF */
     }
@@ -2739,7 +2739,7 @@ rb_io_eof(VALUE io)
         return RBOOL(eof(fptr->fd));
     }
 #endif
-    return RBOOL(io_fillbuf(fptr) < 0);
+    return RBOOL(io_fillbuf(fptr, false) < 0);
 }
 
 /*
@@ -3112,7 +3112,7 @@ io_bufread(char *ptr, long len, rb_io_t *fptr)
             if ((n -= c) <= 0) break;
         }
         rb_io_check_closed(fptr);
-        if (io_fillbuf(fptr) < 0) {
+        if (io_fillbuf(fptr, false) < 0) {
             break;
         }
     }
@@ -3270,7 +3270,7 @@ fill_cbuf(rb_io_t *fptr, int ec_flags)
         if (res == econv_source_buffer_empty) {
             if (fptr->rbuf.len == 0) {
                 READ_CHECK(fptr);
-                if (io_fillbuf(fptr) < 0) {
+                if (io_fillbuf(fptr, false) < 0) {
                     if (!fptr->readconv) {
                         return MORE_CHAR_FINISHED;
                     }
@@ -3992,7 +3992,7 @@ appendline(rb_io_t *fptr, int delim, VALUE *strp, long *lp, rb_encoding *enc)
                 return (unsigned char)RSTRING_PTR(str)[RSTRING_LEN(str)-1];
         }
         READ_CHECK(fptr);
-    } while (io_fillbuf(fptr) >= 0);
+    } while (io_fillbuf(fptr, false) >= 0);
     *lp = limit;
     return EOF;
 }
@@ -4042,7 +4042,7 @@ swallow(rb_io_t *fptr, int term)
                 rb_sys_fail_path(fptr->pathv);
         }
         READ_CHECK(fptr);
-    } while (io_fillbuf(fptr) == 0);
+    } while (io_fillbuf(fptr, false) == 0);
     return FALSE;
 }
 
@@ -4092,7 +4092,7 @@ rb_io_getline_fast(rb_io_t *fptr, rb_encoding *enc, int chomp)
             if (e) break;
         }
         READ_CHECK(fptr);
-    } while (io_fillbuf(fptr) >= 0);
+    } while (io_fillbuf(fptr, false) >= 0);
     if (NIL_P(str)) return Qnil;
 
     str = io_enc_str(str, fptr);
@@ -4762,7 +4762,7 @@ rb_io_each_byte(VALUE io)
             errno = 0;
         }
         READ_CHECK(fptr);
-    } while (io_fillbuf(fptr) >= 0);
+    } while (io_fillbuf(fptr, false) >= 0);
     return io;
 }
 
@@ -4826,7 +4826,7 @@ io_getc(rb_io_t *fptr, rb_encoding *enc)
     }
 
     NEED_NEWLINE_DECORATOR_ON_READ_CHECK(fptr);
-    if (io_fillbuf(fptr) < 0) {
+    if (io_fillbuf(fptr, false) < 0) {
         return Qnil;
     }
     if (rb_enc_asciicompat(enc) && ISASCII(fptr->rbuf.ptr[fptr->rbuf.off])) {
@@ -4848,7 +4848,7 @@ io_getc(rb_io_t *fptr, rb_encoding *enc)
             str = rb_str_new(fptr->rbuf.ptr+fptr->rbuf.off, fptr->rbuf.len);
             fptr->rbuf.len = 0;
           getc_needmore:
-            if (io_fillbuf(fptr) != -1) {
+            if (io_fillbuf(fptr, false) != -1) {
                 rb_str_cat(str, fptr->rbuf.ptr+fptr->rbuf.off, 1);
                 fptr->rbuf.off++;
                 fptr->rbuf.len--;
@@ -4985,7 +4985,7 @@ rb_io_each_codepoint(VALUE io)
         }
     }
     NEED_NEWLINE_DECORATOR_ON_READ_CHECK(fptr);
-    while (io_fillbuf(fptr) >= 0) {
+    while (io_fillbuf(fptr, false) >= 0) {
         r = rb_enc_precise_mbclen(fptr->rbuf.ptr+fptr->rbuf.off,
                                   fptr->rbuf.ptr+fptr->rbuf.off+fptr->rbuf.len, enc);
         if (MBCLEN_CHARFOUND_P(r) &&
@@ -5007,7 +5007,7 @@ rb_io_each_codepoint(VALUE io)
             if (more > numberof(cbuf)) goto invalid;
             while ((n = (int)read_buffered_data(p, more, fptr)) > 0 &&
                    (p += n, (more -= n) > 0)) {
-                if (io_fillbuf(fptr) < 0) goto invalid;
+                if (io_fillbuf(fptr, false) < 0) goto invalid;
                 if ((n = fptr->rbuf.len) > more) n = more;
             }
             r = rb_enc_precise_mbclen(cbuf, p, enc);
@@ -5128,7 +5128,7 @@ rb_io_getbyte(VALUE io)
             rb_io_flush(r_stdout);
         }
     }
-    if (io_fillbuf(fptr) < 0) {
+    if (io_fillbuf(fptr, false) < 0) {
         return Qnil;
     }
     fptr->rbuf.off++;
