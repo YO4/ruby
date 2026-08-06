@@ -7364,25 +7364,12 @@ finish_overlapped(OVERLAPPED *ol, int fd, DWORD size, rb_off_t *_offset)
 static ssize_t
 rb_w32_read_internal(int fd, void *buf, size_t size, rb_off_t *offset)
 {
-    SOCKET sock = TO_SOCKET(fd);
     DWORD read;
     DWORD wait;
     DWORD err;
     size_t len;
     size_t ret;
     OVERLAPPED ol;
-
-    if (is_socket(sock))
-        return rb_w32_recv(fd, buf, size, 0);
-
-    // validate fd by using _get_osfhandle() because we cannot access _nhandle
-    if (_get_osfhandle(fd) == -1) {
-        return -1;
-    }
-
-    if (!offset && _osfile(fd) & FTEXT) {
-        return _read(fd, buf, size);
-    }
 
     rb_acrt_lowio_lock_fh(fd);
 
@@ -7475,6 +7462,23 @@ rb_w32_read_internal(int fd, void *buf, size_t size, rb_off_t *offset)
     rb_acrt_lowio_unlock_fh(fd);
 
     return ret;
+}
+
+/* License: Ruby's */
+static ssize_t
+rb_w32_read_internal0(int fd, void *buf, size_t size, rb_off_t *offset)
+{
+    SOCKET sock = TO_SOCKET(fd);
+
+    if (is_socket(sock))
+        return rb_w32_recv(fd, buf, size, 0);
+
+    // validate fd by using _get_osfhandle() because we cannot access _nhandle
+    if (_get_osfhandle(fd) == -1) {
+        return -1;
+    }
+
+    return rb_w32_read_internal(fd, buf, size, offset);
 }
 
 #undef write
@@ -7588,6 +7592,20 @@ rb_w32_write_internal(int fd, const void *buf, size_t size, rb_off_t *offset)
 ssize_t
 rb_w32_read(int fd, void *buf, size_t size)
 {
+    SOCKET sock = TO_SOCKET(fd);
+
+    if (is_socket(sock))
+        return rb_w32_recv(fd, buf, size, 0);
+
+    // validate fd by using _get_osfhandle() because we cannot access _nhandle
+    if (_get_osfhandle(fd) == -1) {
+        return -1;
+    }
+
+    if (_osfile(fd) & FTEXT) {
+        return _read(fd, buf, size);
+    }
+
     return rb_w32_read_internal(fd, buf, size, NULL);
 }
 
@@ -7598,9 +7616,15 @@ rb_w32_write(int fd, const void *buf, size_t size)
 }
 
 ssize_t
+rb_w32_binread(int fd, void *buf, size_t size)
+{
+    return rb_w32_read_internal0(fd, buf, size, NULL);
+}
+
+ssize_t
 rb_w32_pread(int descriptor, void *base, size_t size, rb_off_t offset)
 {
-    return rb_w32_read_internal(descriptor, base, size, &offset);
+    return rb_w32_read_internal0(descriptor, base, size, &offset);
 }
 
 ssize_t
