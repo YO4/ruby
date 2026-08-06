@@ -352,11 +352,14 @@ struct rb_io {
     rb_econv_t *readconv;
 
     /**
-     * rb_io_ungetc()  destination.   This  buffer   is  read  before  checking
-     * ::rb_io_t::rbuf
+     * (Character)  read  buffer.  Only used when encoding converter is active.
+     * This buffer is read before checking ::rb_io_t::rbuf
      */
     RBIMPL_ATTR_DEPRECATED(("with no replacement"))
     rb_io_buffer_t cbuf;
+
+    /** Boundary of unget'ed data in cbuf */
+    int cbuf_off_unget;
 
     /** Encoding converter used when writing to this IO. */
     RBIMPL_ATTR_DEPRECATED(("with no replacement"))
