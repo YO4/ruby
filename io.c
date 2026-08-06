@@ -598,6 +598,8 @@ rb_sys_fail_on_write(rb_io_t *fptr)
  * conversion IO process and universal newline decorator by default.
  */
 #define NEED_READCONV(fptr) ((fptr)->encs.enc2 != NULL || (fptr)->encs.ecflags & ~ECONV_CRLF_NEWLINE_DECORATOR)
+#define USE_UNIVERSAL_NEWLINE_FASTPATH_ON_READ(fptr) ((fptr)->encs.enc2 == NULL && \
+    ((fptr)->encs.ecflags & ECONV_DECORATOR_MASK) == ECONV_UNIVERSAL_NEWLINE_DECORATOR)
 #define WRITECONV_MASK ( \
     (ECONV_DECORATOR_MASK & ~ECONV_CRLF_NEWLINE_DECORATOR)|\
     ECONV_STATEFUL_DECORATOR_MASK|\
@@ -733,6 +735,8 @@ set_binary_mode_with_seek_cur(rb_io_t *fptr)
 /* Unix */
 # define DEFAULT_TEXTMODE 0
 #define NEED_READCONV(fptr) ((fptr)->encs.enc2 != NULL || NEED_NEWLINE_DECORATOR_ON_READ(fptr))
+#define USE_UNIVERSAL_NEWLINE_FASTPATH_ON_READ(fptr) ((fptr)->encs.enc2 == NULL && \
+    ((fptr)->encs.ecflags & ECONV_DECORATOR_MASK) == ECONV_UNIVERSAL_NEWLINE_DECORATOR)
 #define NEED_WRITECONV(fptr) ( \
   ((fptr)->encs.enc != NULL && (fptr)->encs.enc != rb_ascii8bit_encoding()) || \
   NEED_NEWLINE_DECORATOR_ON_WRITE(fptr) ||                        \
@@ -3216,6 +3220,74 @@ make_readconv(rb_io_t *fptr, int size)
 
 #define MORE_CHAR_SUSPENDED Qtrue
 #define MORE_CHAR_FINISHED Qnil
+
+static inline VALUE
+fill_cbuf_with_universal_newline(rb_io_t *fptr, int ec_flags)
+{
+    const unsigned char *ss, *sp, *se;
+    unsigned char *ds, *dp, *de;
+    bool pending_cr = false;
+
+    ds = dp = (unsigned char *)fptr->cbuf.ptr + fptr->cbuf.off + fptr->cbuf.len;
+    de = (unsigned char *)fptr->cbuf.ptr + fptr->cbuf.capa;
+
+  read_more:
+    if (fptr->rbuf.len == 0 || pending_cr) {
+        READ_CHECK(fptr);
+        if (io_fillbuf(fptr, pending_cr) < 0) {
+            if (pending_cr) {
+                fptr->rbuf.off++;
+                fptr->rbuf.len--;
+                *dp = '\n';
+                fptr->cbuf.len++;
+                return MORE_CHAR_SUSPENDED;
+            }
+            return MORE_CHAR_FINISHED;
+        }
+        pending_cr = false;
+    }
+    ss = sp = (const unsigned char *)fptr->rbuf.ptr + fptr->rbuf.off;
+    se = sp + fptr->rbuf.len;
+    if (*sp == '\r') {
+        if (fptr->rbuf.len == 1) {
+            fptr->rbuf.off = 0;
+            fptr->rbuf.len = 1;
+            fptr->rbuf.ptr[fptr->rbuf.off] = '\r';
+            pending_cr = true;
+            goto read_more;
+        }
+        *dp++ = '\n';
+        sp++;
+        if (*sp == '\n')
+            sp++;
+    }
+    else {
+        *dp++ = *sp++;
+    }
+    if (ec_flags & ECONV_AFTER_OUTPUT) goto end;
+
+    while (sp + 1 < se && dp < de) {
+        if (*sp == '\r') {
+            *dp++ = '\n';
+            sp++;
+            if (*sp == '\n')
+                sp++;
+        }
+        else {
+            *dp++ = *sp++;
+        }
+    }
+    if (sp < se && dp < de && *sp != '\r') {
+        *dp++ = *sp++;
+    }
+
+  end:
+    fptr->rbuf.off += (int)(sp - ss);
+    fptr->rbuf.len -= (int)(sp - ss);
+    fptr->cbuf.len += (int)(dp - ds);
+    return MORE_CHAR_SUSPENDED;
+}
+
 static VALUE
 fill_cbuf(rb_io_t *fptr, int ec_flags)
 {
@@ -3236,6 +3308,9 @@ fill_cbuf(rb_io_t *fptr, int ec_flags)
         memmove(fptr->cbuf.ptr, fptr->cbuf.ptr+fptr->cbuf.off, fptr->cbuf.len);
         fptr->cbuf.off = 0;
     }
+
+    if (USE_UNIVERSAL_NEWLINE_FASTPATH_ON_READ(fptr))
+        return fill_cbuf_with_universal_newline(fptr, ec_flags);
 
     cbuf_len0 = fptr->cbuf.len;
 
