@@ -2887,6 +2887,28 @@ class TestIO < Test::Unit::TestCase
     }
   end
 
+  def test_reopen_io_with_pending_char
+    make_tempfile {|t|
+      open(__FILE__, "rt") {|f|
+        f.ungetc(f.getc)
+        open(t.path, "rt") {|f2| f.reopen(f2)}
+        assert_equal("foo\n", f.gets)
+      }
+
+      open(__FILE__, "rt") {|f|
+        f.ungetc('a')
+        open(t.path, "rt") {|f2| f.reopen(f2)}
+        assert_equal("foo\n", f.gets)
+      }
+
+      open(__FILE__, "rt") {|f|
+        f.ungetc(f.getc)
+        open(t.path, "rt") {|f2| f.reopen(f2)}
+        assert_nothing_raised(IOError) {f.getbyte}
+      }
+    }
+  end
+
   def make_tempfile_for_encoding
     t = make_tempfile
     open(t.path, "rb+:utf-8") {|f| f.puts "\u7d05\u7389bar\n"}
