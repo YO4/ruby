@@ -8640,6 +8640,7 @@ rb_io_reopen(int argc, VALUE *argv, VALUE file)
         if (io_fflush(fptr) < 0)
             rb_sys_fail_on_write(fptr);
     }
+    clear_codeconv(fptr);
     fptr->rbuf.off = fptr->rbuf.len = 0;
 
     if (fptr->stdio_file) {
