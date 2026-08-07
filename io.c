@@ -620,6 +620,8 @@ rb_sys_fail_on_write(rb_io_t *fptr)
     }\
 } while(0)
 
+#define CTRLZ '\x1A'
+
 /*
  * We use io_seek to back cursor position when changing mode from text to binary,
  * but stdin and pipe cannot seek back. Stdin and pipe read should use encoding
@@ -2703,6 +2705,18 @@ rb_io_eof(VALUE io)
     if (READ_CHAR_PENDING(fptr)) return Qfalse;
     if (READ_DATA_PENDING(fptr)) return Qfalse;
     READ_CHECK(fptr);
+#if RUBY_CRLF_ENVIRONMENT
+    if (NEED_READCONV(fptr) &&
+        USE_CRLF_NEWLINE_FASTPATH_ON_READ(fptr)) {
+        if (io_fillbuf(fptr, false) < 0) {
+            return Qtrue;
+        }
+        if (*READ_DATA_PENDING_PTR(fptr) == CTRLZ) {
+            return Qtrue;
+        }
+        return Qfalse;
+    }
+#endif
     return RBOOL(io_fillbuf(fptr, false) < 0);
 }
 
@@ -3211,6 +3225,9 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
     }
     ss = sp = (const unsigned char *)fptr->rbuf.ptr + fptr->rbuf.off;
     se = sp + fptr->rbuf.len;
+    if (*sp == CTRLZ) {
+        return MORE_CHAR_FINISHED;
+    }
     if (fptr->rbuf.len > 1 && *sp == '\r' && *(sp + 1) == '\n') {
         *dp++ = '\n';
         sp += 2;
@@ -3227,6 +3244,9 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
     }
 
     while (sp + 1 < se && dp < de) {
+        if (*sp == CTRLZ) {
+            goto end;
+        }
         if (*sp == '\r' && *(sp + 1) == '\n') {
             *dp++ = '\n';
             sp += 2;
@@ -3236,7 +3256,7 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
             *dp++ = *sp++;
         }
     }
-    if (sp < se && dp < de && *sp != '\r') {
+    if (sp < se && dp < de && *sp != '\r' && *sp != CTRLZ) {
         *dp++ = *sp++;
     }
 
