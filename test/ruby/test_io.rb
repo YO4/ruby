@@ -2826,6 +2826,28 @@ class TestIO < Test::Unit::TestCase
     f1.close
   end
 
+  def test_reopen_with_pending_char
+    make_tempfile {|t|
+      open(__FILE__, "rt") {|f|
+        f.ungetc(f.getc)
+        f.reopen(t.path, "rt")
+        assert_equal("foo\n", f.gets)
+      }
+
+      open(__FILE__, "rt") {|f|
+        f.ungetc('a')
+        f.reopen(t.path, "rt")
+        assert_equal("foo\n", f.gets)
+      }
+
+      open(__FILE__, "rt") {|f|
+        f.ungetc(f.getc)
+        f.reopen(t.path, "rt")
+        assert_nothing_raised(IOError) {f.getbyte}
+      }
+    }
+  end
+
   def test_reopen_io_with_pending_byte
     mkcdtmpdir {
       File.binwrite("src", "0123456789")
