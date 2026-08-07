@@ -424,6 +424,39 @@ class TestIO < Test::Unit::TestCase
     }
   end
 
+  def test_ctrlz_eof_in_text_mode
+    omit unless /mingw|mswin/ =~ RUBY_PLATFORM
+
+    mkcdtmpdir do
+      File.binwrite("ctrlz.txt", "abc\r\ndef\x1aghij")
+      assert_equal("abc\ndef", File.read("ctrlz.txt"))
+      assert_equal("abc\r\ndef\x1aghij", File.binread("ctrlz.txt"))
+      assert_equal(["abc\n", "def"], File.readlines("ctrlz.txt"))
+
+      File.open("ctrlz.txt", "r") do |f|
+        assert_equal("abc\n", f.gets)
+        assert_equal("def", f.gets)
+        assert_nil(f.gets)
+        assert_predicate(f, :eof?)
+        assert_equal(0x1a, f.getbyte)
+        assert_equal("ghij", f.gets)
+      end
+
+      File.binwrite("ctrlz2.txt", "\x1aafter")
+      File.open("ctrlz2.txt", "r") do |f|
+        assert_predicate(f, :eof?)
+      end
+
+      File.open("ctrlz.txt", "rt") do |f|
+        assert_equal("abc\ndef\x1aghij", f.read)
+      end
+
+      File.open("ctrlz.txt", "r:us-ascii:utf-8") do |f|
+        assert_equal("abc\ndef\x1aghij", f.read)
+      end
+    end
+  end
+
   def test_getbyte_after_rewind_with_pending_char
     bug22239 = '[Bug #22239]'
     make_tempfile {|t|
