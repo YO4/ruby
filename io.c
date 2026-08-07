@@ -624,6 +624,8 @@ rb_sys_fail_on_write(rb_io_t *fptr)
     }\
 } while(0)
 
+#define CTRLZ '\x1A'
+
 static void io_unread_cbuf(rb_io_t *fptr);
 
 /*
@@ -2701,6 +2703,20 @@ rb_io_eof(VALUE io)
     rb_io_check_char_readable(fptr);
 
     if (READ_CHAR_PENDING(fptr)) return Qfalse;
+#if RUBY_CRLF_ENVIRONMENT
+    if (NEED_READCONV(fptr) &&
+        USE_CRLF_NEWLINE_FASTPATH_ON_READ(fptr)) {
+        READ_CHECK(fptr);
+        if (io_fillbuf(fptr) < 0) {
+            return Qtrue;
+        }
+        if (READ_DATA_PENDING(fptr) &&
+            *READ_DATA_PENDING_PTR(fptr) == CTRLZ) {
+            return Qtrue;
+        }
+        return Qfalse;
+    }
+#endif
     if (READ_DATA_PENDING(fptr)) return Qfalse;
     READ_CHECK(fptr);
     return RBOOL(io_fillbuf(fptr) < 0);
@@ -3211,6 +3227,9 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
     }
     ss = sp = (const unsigned char *)fptr->rbuf.ptr + fptr->rbuf.off;
     se = sp + fptr->rbuf.len;
+    if (*sp == CTRLZ) {
+        return MORE_CHAR_FINISHED;
+    }
     if (fptr->rbuf.len > 1 && *sp == '\r' && *(sp + 1) == '\n') {
         // The first character of cbuf is always consumed.
         *dp++ = '\n';
@@ -3228,6 +3247,9 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
     }
 
     while (sp + 1 < se && dp < de) {
+        if (*sp == CTRLZ) {
+            goto end;
+        }
         if (*sp == '\r' && *(sp + 1) == '\n') {
             *dp++ = '\n';
             sp += 2;
@@ -3239,7 +3261,7 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
             *dp++ = *sp++;
         }
     }
-    if (sp < se && dp < de && *sp != '\r') {
+    if (sp < se && dp < de && *sp != '\r' && *sp != CTRLZ) {
         *dp++ = *sp++;
     }
 
@@ -3556,56 +3578,113 @@ io_readconv_universal_newline_inplace(unsigned char *ptr, long rend, long conv_l
 #if RUBY_CRLF_ENVIRONMENT
 static long
 io_readconv_crlf_newline_inplace(unsigned char *ptr, long rend, long conv_len,
-                                 long *remains)
+                                 long *remains, long *ctrlz)
 {
     long sp = conv_len;
     *remains = 0;
+    // Locate Ctrl-Z (EOF) once via memchr.
+    long cz = -1;
+    {
+        if (sp < rend) {
+            unsigned char *pc = memchr(ptr + sp, CTRLZ, (size_t)(rend - sp));
+            if (pc) cz = (long)(pc - ptr);
+        }
+    }
+    long zend = (cz >= 0 ? cz : rend);
     // Fast path: no collapse yet (sp == dp).  Use memchr to skip to '\r'.
-    while (sp < rend) {
-        unsigned char *p = memchr(ptr + sp, '\r', (size_t)(rend - sp));
+    while (sp < zend) {
+        unsigned char *p = memchr(ptr + sp, '\r', (size_t)(zend - sp));
         if (!p) {
-            return rend;
+            sp = zend;
+            break;
         }
         sp = (long)(p - ptr);
         if (sp + 1 == rend) {
             *remains = 1;
             return sp;
         }
-        if (ptr[sp + 1] == '\n') {
-            break;          // CRLF -> need slow path (shrink)
+        if (sp + 1 < zend && ptr[sp + 1] == '\n') {
+            break;  // CRLF -> need slow path (shrink)
+        }
+        if (sp + 1 == zend && zend == cz) {
+            // '\r' just before Ctrl-Z: lone '\r', keep as-is.
+            sp++;
+            sp = zend;  // will break below
+            break;
         }
         sp++;
     }
-    if (!(sp < rend)) return sp;
+    if (!(sp < zend)) {
+        if (cz >= 0) {
+            *ctrlz = cz;
+        }
+        return sp;
+    }
     // Slow path
     long dp = sp;
-    while (sp + 1 < rend) {
-        while (sp + 1 < rend && ptr[sp] == '\r' && ptr[sp + 1] == '\n') {
+    while (sp + 1 < zend) {
+        while (sp + 1 < zend && ptr[sp] == '\r' && ptr[sp + 1] == '\n') {
             ptr[dp++] = '\n';   // CRLF -> LF
             sp += 2;
         }
-        if (sp + 1 >= rend) break;
+        if (sp + 1 >= zend) break;
         if (ptr[sp] != '\r') {
-            unsigned char *p = memchr(ptr + sp + 1, '\r', (size_t)(rend - sp - 1));
-            long next = p ? (long)(p - ptr) : rend;
+            unsigned char *p = memchr(ptr + sp + 1, '\r', (size_t)(zend - sp - 1));
+            long next = p ? (long)(p - ptr) : zend;
             size_t run = (size_t)(next - sp);
             memmove(ptr + dp, ptr + sp, run);
             dp += (next - sp);
             sp = next;
-            if (sp >= rend - 1) break;
+            if (sp >= zend - 1) break;
             continue;
         }
         ptr[dp++] = ptr[sp++];  // Lone '\r': keep as-is.
     }
-    if (sp == rend - 1) {       // exactly one byte left
+    if (sp == zend - 1) {       // exactly one byte left
         if (ptr[sp] == '\r') {
-            ptr[dp] = '\r'; // Trailing '\r': keep as pending byte.
-            *remains = 1;
-            return dp;
+            if (zend == rend) {
+                ptr[dp] = '\r'; // Trailing '\r': keep as pending byte.
+                *remains = 1;
+                return dp;
+            }
+            // '\r' just before Ctrl-Z: keep as-is.
         }
         ptr[dp++] = ptr[sp++];
     }
+    if (cz >= 0) {
+        *ctrlz = cz;
+        return dp;
+    }
     return dp;
+}
+
+static void
+io_unread_ctrlz(rb_io_t *fptr, VALUE str, long end, long ctrlz)
+{
+    long const putback = end - ctrlz;
+    long const rbuf_capa = fptr->rbuf.ptr ? fptr->rbuf.capa : IO_RBUF_CAPA_MIN;
+    long keep = putback;
+
+    if (putback > rbuf_capa) {
+        errno = 0;
+        // Only rbuf_capa bytes of the putback can be kept in rbuf.  Seek
+        // the fd back so that it re-delivers the rest.
+        rb_off_t const overflow = putback - rbuf_capa;
+        if (!(lseek(fptr->fd, -overflow, SEEK_CUR) < 0 && errno)) {
+            keep = rbuf_capa;
+        }
+    }
+
+    if (fptr->rbuf.ptr == NULL) {
+        long const keep_capa = keep < IO_RBUF_CAPA_MIN ? IO_RBUF_CAPA_MIN : keep;
+        fptr->rbuf.ptr = ALLOC_N(char, keep_capa);
+        fptr->rbuf.capa = (int)keep_capa;
+    }
+
+    fptr->rbuf.off = 0;
+    fptr->rbuf.len = (int)keep;
+    fptr->rbuf_off_unget = 0;
+    memmove(fptr->rbuf.ptr, RSTRING_PTR(str) + ctrlz, (size_t)keep);
 }
 #endif
 
@@ -3657,11 +3736,9 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
                 conv_len = 0;
             }
 
-            // Consume all bytes buffered in rbuf into str before the loop,
-            // so that rbuf is empty during the loop and io_fread reads
-            // from the fd directly without refilling rbuf.  The drained
-            // bytes are unconverted raw data, which the first iteration
-            // below converts.
+            // Consume all bytes buffered in rbuf.
+            // The drained bytes are unconverted raw data, which the first
+            // iteration below converts.
             if (fptr->rbuf.len > 0) {
                 io_setstrbuf(&str, conv_len + fptr->rbuf.len);
                 drained = read_buffered_data(RSTRING_PTR(str) + conv_len,
@@ -3670,6 +3747,9 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
             chunk = siz;
             for (;;) {
                 long end = conv_len + remains;
+#if RUBY_CRLF_ENVIRONMENT
+                long ctrlz = -1;
+#endif
                 if (drained > 0) {
                     n = 0;      // just avoid warnings
                     // the drained bytes are all we have for now
@@ -3700,7 +3780,10 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
                 {
                     conv_len = io_readconv_crlf_newline_inplace(
                         (unsigned char *)RSTRING_PTR(str), end, conv_len,
-                        &remains);
+                        &remains, &ctrlz);
+                    if (ctrlz >= 0) {
+                        io_unread_ctrlz(fptr, str, end, ctrlz);
+                    }
                 }
 #endif
                 if (cr != ENC_CODERANGE_BROKEN)
@@ -3708,6 +3791,9 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
                         RSTRING_PTR(str) + pos,
                         RSTRING_PTR(str) + conv_len, enc, &cr);
                 rb_str_set_len(str, conv_len);
+#if RUBY_CRLF_ENVIRONMENT
+                if (ctrlz >= 0) break;
+#endif
                 if (drained == 0) {
                     if (n < chunk) {        // EOF
                         break;
