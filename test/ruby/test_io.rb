@@ -363,6 +363,40 @@ class TestIO < Test::Unit::TestCase
     }
   end
 
+  def test_ungetc_with_seek_textmode
+    make_tempfile {|t|
+      open(t.path, "rt") {|f|
+        f.ungetc('a')
+        f.seek(2, :SET)
+        assert_equal('o', f.getc)
+      }
+
+      open(t.path, "rt") {|f|
+        f.getc
+        f.ungetc('a')
+        f.seek(2, :SET)
+        assert_equal('o', f.getc)
+      }
+    }
+  end
+
+  def test_ungetc_with_pos_textmode
+    make_tempfile {|t|
+      open(t.path, "rt") {|f|
+        f.ungetc('a')
+        f.pos = 2
+        assert_equal('o', f.getc)
+      }
+
+      open(t.path, "rt") {|f|
+        f.getc
+        f.ungetc('a')
+        f.pos = 2
+        assert_equal('o', f.getc)
+      }
+    }
+  end
+
   def test_eof_after_seek_with_pending_char
     make_tempfile {|t|
       open(t.path, "rt") {|f|
