@@ -624,6 +624,8 @@ rb_sys_fail_on_write(rb_io_t *fptr)
     }\
 } while(0)
 
+#define CTRLZ '\x1A'
+
 static void io_unread_cbuf(rb_io_t *fptr);
 
 /*
@@ -2704,7 +2706,12 @@ rb_io_eof(VALUE io)
 #if RUBY_CRLF_ENVIRONMENT
     if (NEED_READCONV(fptr) &&
         USE_CRLF_NEWLINE_FASTPATH_ON_READ(fptr)) {
+        READ_CHECK(fptr);
         if (io_fillbuf(fptr) < 0) {
+            return Qtrue;
+        }
+        if (READ_DATA_PENDING(fptr) &&
+            *READ_DATA_PENDING_PTR(fptr) == CTRLZ) {
             return Qtrue;
         }
         return Qfalse;
@@ -3220,6 +3227,9 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
     }
     ss = sp = (const unsigned char *)fptr->rbuf.ptr + fptr->rbuf.off;
     se = sp + fptr->rbuf.len;
+    if (*sp == CTRLZ) {
+        return MORE_CHAR_FINISHED;
+    }
     if (fptr->rbuf.len > 1 && *sp == '\r' && *(sp + 1) == '\n') {
         // The first character of cbuf is always consumed.
         *dp++ = '\n';
@@ -3237,6 +3247,9 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
     }
 
     while (sp + 1 < se && dp < de) {
+        if (*sp == CTRLZ) {
+            goto end;
+        }
         if (*sp == '\r' && *(sp + 1) == '\n') {
             *dp++ = '\n';
             sp += 2;
@@ -3248,7 +3261,7 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
             *dp++ = *sp++;
         }
     }
-    if (sp < se && dp < de && *sp != '\r') {
+    if (sp < se && dp < de && *sp != '\r' && *sp != CTRLZ) {
         *dp++ = *sp++;
     }
 
@@ -3559,6 +3572,10 @@ io_readconv_crlf_newline_inplace(unsigned char *ptr, long rend, long conv_len,
     // Fast path
     // while no CRLF has been collapsed (sp == dp) a single cursor is enough
     while (sp < rend) {
+        if (ptr[sp] == CTRLZ) {
+            *ctrlz = sp;
+            break;
+        }
         if (ptr[sp] == '\r') {
             if (sp + 1 == rend) {
                 *remains = 1;
@@ -3573,6 +3590,10 @@ io_readconv_crlf_newline_inplace(unsigned char *ptr, long rend, long conv_len,
     // Slow path
     long dp = sp;
     while (sp < rend) {
+        if (ptr[sp] == CTRLZ) {
+            *ctrlz = sp;
+            break;
+        }
         if (ptr[sp] == '\r') {
             if (sp + 1 < rend && ptr[sp + 1] == '\n') {
                 ptr[dp++] = '\n';   // CRLF -> LF
