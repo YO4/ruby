@@ -2826,6 +2826,45 @@ class TestIO < Test::Unit::TestCase
     f1.close
   end
 
+  def test_reopen_io_with_pending_byte
+    mkcdtmpdir {
+      File.binwrite("src", "0123456789")
+
+      ["rb", "r+b"].each {|mode|
+        open("src", mode) {|f|
+          f.getbyte
+          IO.pipe {|r, w|
+            w.binmode
+            w.write("ABC")
+            w.close
+            f.reopen(r)
+            assert_equal("ABC", f.read, "reopen a #{mode} IO")
+          }
+        }
+      }
+    }
+  end
+
+  def test_reopen_io_with_pending_byte_then_write
+    mkcdtmpdir {
+      File.binwrite("src", "abc")
+
+      ["rb", "r+b"].each_with_index {|mode, i|
+        dst = "dst#{i}"
+        open("src", mode) {|f|
+          f.getbyte
+          open(dst, "wb") {|f2|
+            f2.write("XXXXXXXX")
+            f.reopen(f2)
+            f.write("Y")
+            f.flush
+          }
+        }
+        assert_equal("XXXXXXXXY", File.binread(dst), "reopen a #{mode} IO")
+      }
+    }
+  end
+
   def make_tempfile_for_encoding
     t = make_tempfile
     open(t.path, "rb+:utf-8") {|f| f.puts "\u7d05\u7389bar\n"}
