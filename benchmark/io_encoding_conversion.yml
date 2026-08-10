@@ -1,0 +1,33 @@
+prelude: |
+  require "tempfile"
+  str52 = ((?a..?z).to_a+(?A..?Z).to_a).join
+  $tempfile = Tempfile.open("sparse_lf") do |f|
+    f.set_encoding("ascii-8bit", crlf_newline: false)
+    10000.times { f.puts str52 }
+    f
+  end
+  $tempfile.open
+  $binarymode = open($tempfile.path, "rb")
+  $with_conversion = open($tempfile.path, "r:us-ascii:utf-8")
+  at_exit do
+    $binarymode.close
+    $with_conversion.close
+  end
+
+benchmark:
+  - name: read_binary
+    script: |
+      $binarymode.rewind
+      $binarymode.read
+  - name: read_with_conversion
+    script: |
+      $with_conversion.rewind
+      $with_conversion.read
+  - name: readlines_binary
+    script: |
+      $binarymode.rewind
+      $binarymode.readlines
+  - name: readlines_with_conversion
+    script: |
+      $with_conversion.rewind
+      $with_conversion.readlines
