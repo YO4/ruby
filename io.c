@@ -3488,6 +3488,117 @@ io_set_read_length(VALUE str, long n, int shrinkable)
     }
 }
 
+static long
+io_readconv_universal_newline_inplace(unsigned char *ptr, long rend, long conv_len,
+                                       long *remains)
+{
+    long sp = conv_len;
+    *remains = 0;
+    // Fast path
+    // while no CRLF has been collapsed (sp == dp) a single cursor is enough
+    while (sp < rend) {
+        if (ptr[sp] == '\r') {
+            if (sp + 1 == rend) {
+                *remains = 1;
+                return sp;
+            }
+            if (sp + 1 < rend && ptr[sp + 1] == '\n') {
+                break;
+            }
+            ptr[sp] = '\n';       // Lone '\r' -> '\n' (1:1).
+        }
+        sp++;
+    }
+    // Slow path
+    long dp = sp;
+    while (sp < rend) {
+        if (ptr[sp] == '\r') {
+            if (sp + 1 < rend && ptr[sp + 1] == '\n') {
+                ptr[dp++] = '\n';   // CRLF -> LF
+                sp += 2;
+                continue;
+            }
+            if (sp + 1 < rend) {
+                ptr[dp++] = '\n';   // Lone '\r' -> '\n'
+                sp++;
+                continue;
+            }
+            ptr[dp] = '\r';         // Trailing '\r': keep as pending byte.
+            *remains = 1;
+            return dp;
+        }
+        ptr[dp++] = ptr[sp++];
+    }
+    return dp;
+}
+
+#if RUBY_CRLF_ENVIRONMENT
+static long
+io_readconv_crlf_newline_inplace(unsigned char *ptr, long rend, long conv_len,
+                                 long *remains, long *ctrlz)
+{
+    long sp = conv_len;
+    *remains = 0;
+    // Fast path
+    // while no CRLF has been collapsed (sp == dp) a single cursor is enough
+    while (sp < rend) {
+        if (ptr[sp] == '\r') {
+            if (sp + 1 == rend) {
+                *remains = 1;
+                return sp;
+            }
+            if (sp + 1 < rend && ptr[sp + 1] == '\n') {
+                break;
+            }
+        }
+        sp++;
+    }
+    // Slow path
+    long dp = sp;
+    while (sp < rend) {
+        if (ptr[sp] == '\r') {
+            if (sp + 1 < rend && ptr[sp + 1] == '\n') {
+                ptr[dp++] = '\n';   // CRLF -> LF
+                sp += 2;
+                continue;
+            }
+            if (sp + 1 == rend) {
+                ptr[dp] = '\r';     // Trailing '\r': keep as pending byte.
+                *remains = 1;
+                return dp;
+            }
+        }
+        ptr[dp++] = ptr[sp++];
+    }
+    return dp;
+}
+
+static void
+io_unread_ctrlz(rb_io_t *fptr, VALUE str, long end, long ctrlz)
+{
+    long const putback = end - ctrlz;
+    long const rbuf_capa = fptr->rbuf.ptr ? fptr->rbuf.capa : IO_RBUF_CAPA_MIN;
+    long keep = putback;
+
+    if (putback > rbuf_capa) {
+        errno = 0;
+        rb_off_t const overflow = putback - rbuf_capa;
+        if (!(lseek(fptr->fd, -overflow, SEEK_CUR) < 0 && errno)) {
+            keep = rbuf_capa;
+        }
+    }
+
+    long const keep_capa = keep < IO_RBUF_CAPA_MIN ? IO_RBUF_CAPA_MIN : keep;
+    if (fptr->rbuf.ptr == NULL || keep_capa > fptr->rbuf.capa) {
+        REALLOC_N(fptr->rbuf.ptr, char, (size_t)keep_capa);
+        fptr->rbuf.capa = (int)keep_capa;
+    }
+    fptr->rbuf.off = 0;
+    fptr->rbuf.len = (int)keep;
+    memmove(fptr->rbuf.ptr, RSTRING_PTR(str) + ctrlz, keep);
+}
+#endif
+
 static VALUE
 read_all(rb_io_t *fptr, long siz, VALUE str)
 {
@@ -3499,6 +3610,82 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
     int shrinkable;
 
     if (NEED_READCONV(fptr)) {
+        if (USE_CRLF_NEWLINE_FASTPATH_ON_READ(fptr) ||
+            USE_UNIVERSAL_NEWLINE_FASTPATH_ON_READ(fptr)) {
+
+            // Fast path: read raw bytes directly into str and translate
+            // newlines in place, avoiding the cbuf/encoding-conversion.
+
+            enc = io_read_encoding(fptr);
+            cr = 0;
+
+            if (siz == 0) siz = BUFSIZ;
+            shrinkable = io_setstrbuf(&str, siz);
+
+            bool const universal = !USE_CRLF_NEWLINE_FASTPATH_ON_READ(fptr);
+
+            long chunk = siz;
+            long conv_len;
+            long remains = 0;
+            if (fptr->cbuf.len) {
+                if (!NIL_P(str)) rb_str_set_len(str, 0);
+                io_shift_cbuf(fptr, fptr->cbuf.len, &str);
+                clear_readconv(fptr);
+                conv_len = RSTRING_LEN(str);
+            }
+            else {
+                conv_len = 0;
+            }
+
+            for (;;) {
+                READ_CHECK(fptr);
+                long end = conv_len + remains;
+                n = io_fread(str, end, chunk, fptr);
+                if (n == 0)         // EOF
+                {
+                    if (remains) {
+                        ((unsigned char *)RSTRING_PTR(str))[conv_len] =
+                            universal ? '\n' : '\r';
+                        conv_len++;
+                        remains = 0;
+                    }
+                    break;
+                }
+                end += n;
+                rb_str_set_len(str, end);
+
+                if (universal)
+                    conv_len = io_readconv_universal_newline_inplace(
+                        (unsigned char *)RSTRING_PTR(str), end, conv_len,
+                        &remains);
+#if RUBY_CRLF_ENVIRONMENT
+                else
+                {
+                    long ctrlz = -1;
+                    conv_len = io_readconv_crlf_newline_inplace(
+                        (unsigned char *)RSTRING_PTR(str), end, conv_len,
+                        &remains, &ctrlz);
+                    if (ctrlz >= 0) {
+                        io_unread_ctrlz(fptr, str, end, ctrlz);
+                        break;
+                    }
+                }
+#endif
+
+                if (chunk > IO_RBUF_CAPA_MIN) chunk = IO_RBUF_CAPA_MIN;
+            }
+
+            rb_str_set_len(str, conv_len);
+            if (cr != ENC_CODERANGE_BROKEN)
+                rb_str_coderange_scan_restartable(
+                    RSTRING_PTR(str), RSTRING_PTR(str) + conv_len, enc, &cr);
+            if (shrinkable) io_shrink_read_string(str, conv_len);
+            str = io_enc_str(str, fptr);
+            ENC_CODERANGE_SET(str, cr);
+            return str;
+        }
+
+        // Slow path
         int first = !NIL_P(str);
         shrinkable = io_setstrbuf(&str,0);
         make_readconv(fptr, 0);
