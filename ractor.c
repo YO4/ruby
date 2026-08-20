@@ -58,7 +58,7 @@ ASSERT_ractor_unlocking(rb_ractor_t *r)
 {
 #if RACTOR_CHECK_MODE > 0
     const rb_execution_context_t *ec = rb_current_ec_noinline();
-    if (ec != NULL && r->sync.locked_by == rb_ractor_self(rb_ec_ractor_ptr(ec))) {
+    if (ec != NULL && r->sync.locked_by == rb_ec_thread_ptr(ec)) {
         rb_bug("recursive ractor locking");
     }
 #endif
@@ -69,8 +69,8 @@ ASSERT_ractor_locking(rb_ractor_t *r)
 {
 #if RACTOR_CHECK_MODE > 0
     const rb_execution_context_t *ec = rb_current_ec_noinline();
-    if (ec != NULL && r->sync.locked_by != rb_ractor_self(rb_ec_ractor_ptr(ec))) {
-        rp(r->sync.locked_by);
+    if (ec != NULL && r->sync.locked_by != rb_ec_thread_ptr(ec)) {
+        rp(r->sync.locked_by ? r->sync.locked_by->self : Qnil);
         rb_bug("ractor lock is not acquired.");
     }
 #endif
@@ -93,8 +93,7 @@ ractor_lock(rb_ractor_t *r, const char *file, int line)
 
 #if RACTOR_CHECK_MODE > 0
     if (ec != NULL) {
-        rb_ractor_t *cr = rb_ec_ractor_ptr(ec);
-        r->sync.locked_by = rb_ractor_self(cr);
+        r->sync.locked_by = rb_ec_thread_ptr(ec);
     }
 #endif
 
@@ -106,7 +105,7 @@ ractor_lock_self(rb_ractor_t *cr, const char *file, int line)
 {
     VM_ASSERT(cr == rb_ec_ractor_ptr(rb_current_ec_noinline()));
 #if RACTOR_CHECK_MODE > 0
-    VM_ASSERT(cr->sync.locked_by != cr->pub.self);
+    VM_ASSERT(cr->sync.locked_by != rb_ec_thread_ptr(rb_current_ec_noinline()));
 #endif
     ractor_lock(cr, file, line);
 }
@@ -116,7 +115,7 @@ ractor_unlock(rb_ractor_t *r, const char *file, int line)
 {
     ASSERT_ractor_locking(r);
 #if RACTOR_CHECK_MODE > 0
-    r->sync.locked_by = Qnil;
+    r->sync.locked_by = NULL;
 #endif
 
     const rb_execution_context_t *ec = rb_current_ec_noinline();
@@ -136,7 +135,7 @@ ractor_unlock_self(rb_ractor_t *cr, const char *file, int line)
 {
     VM_ASSERT(cr == rb_ec_ractor_ptr(rb_current_ec_noinline()));
 #if RACTOR_CHECK_MODE > 0
-    VM_ASSERT(cr->sync.locked_by == cr->pub.self);
+    VM_ASSERT(cr->sync.locked_by == rb_ec_thread_ptr(rb_current_ec_noinline()));
 #endif
     ractor_unlock(cr, file, line);
 }

@@ -1331,8 +1331,8 @@ static void
 ractor_cond_wait(rb_ractor_t *r)
 {
 #if RACTOR_CHECK_MODE > 0
-    VALUE locked_by = r->sync.locked_by;
-    r->sync.locked_by = Qnil;
+    rb_thread_t *locked_by = r->sync.locked_by;
+    r->sync.locked_by = NULL;
 #endif
     rb_native_cond_wait(&r->sync.wakeup_cond, &r->sync.lock);
 

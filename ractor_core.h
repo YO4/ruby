@@ -20,7 +20,7 @@ struct rb_ractor_sync {
     rb_nativethread_lock_t lock;
 
 #if RACTOR_CHECK_MODE > 0
-    VALUE locked_by;
+    rb_thread_t *locked_by; /* owner thread */
 #endif
 
 #ifndef RUBY_THREAD_PTHREAD_H

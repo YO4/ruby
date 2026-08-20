@@ -496,6 +496,26 @@ assert_equal '{ok: 3}', %q{
   3.times.map{Ractor.receive}.tally
 } unless yjit_enabled? # YJIT: `[BUG] Bus Error at 0x000000010b7002d0` in jit_exec()
 
+# A blocked thread can release the Ractor GVL while another thread in the same Ractor
+# runs.  The lock owner check must distinguish those threads on win32.
+assert_equal 'ok', %q{
+  r = Ractor.new Ractor.current do |main|
+    worker = Thread.new { loop { Object.new } }
+    main.send(:ready)
+    loop do
+      break if Ractor.receive == :stop
+    end
+    worker.kill
+    worker.join
+    :ok
+  end
+
+  Ractor.receive
+  1000.times { r.send(nil) }
+  r.send(:stop)
+  r.value
+} if /mingw|mswin/ =~ RUBY_PLATFORM
+
 # unshareable object are copied
 assert_equal 'false', %q{
   obj = 'str'.dup
