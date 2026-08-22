@@ -6982,31 +6982,7 @@ rb_io_extract_modeenc(VALUE *vmode_p, VALUE *vperm_p, VALUE opthash,
         }
     }
 
-    if (NIL_P(opthash)) {
-        ecflags = (fmode & FMODE_READABLE) ?
-            MODE_BTMODE(ECONV_DEFAULT_NEWLINE_DECORATOR,
-                        0, ECONV_UNIVERSAL_NEWLINE_DECORATOR) : 0;
-#ifdef TEXTMODE_NEWLINE_DECORATOR_ON_WRITE
-        ecflags |= (fmode & FMODE_WRITABLE) ?
-            MODE_BTMODE(TEXTMODE_NEWLINE_DECORATOR_ON_WRITE,
-                        0, TEXTMODE_NEWLINE_DECORATOR_ON_WRITE) : 0;
-#endif
-        SET_UNIVERSAL_NEWLINE_DECORATOR_IF_ENC2(enc2, ecflags);
-        ecopts = Qnil;
-        if (fmode & FMODE_BINMODE) {
-#ifdef O_BINARY
-            oflags |= O_BINARY;
-#endif
-            if (!has_enc)
-                rb_io_ext_int_to_encs(rb_ascii8bit_encoding(), NULL, &enc, &enc2, fmode);
-        }
-#if DEFAULT_TEXTMODE
-        else if (NIL_P(vmode)) {
-            fmode |= DEFAULT_TEXTMODE;
-        }
-#endif
-    }
-    else {
+    if (!NIL_P(opthash)) {
         VALUE v;
         v = rb_hash_aref(opthash, sym_flags);
         if (!NIL_P(v)) {
@@ -7016,13 +6992,6 @@ rb_io_extract_modeenc(VALUE *vmode_p, VALUE *vperm_p, VALUE opthash,
             fmode = rb_io_oflags_fmode(oflags);
         }
         extract_binmode(opthash, &fmode);
-        if (fmode & FMODE_BINMODE) {
-#ifdef O_BINARY
-            oflags |= O_BINARY;
-#endif
-            if (!has_enc)
-                rb_io_ext_int_to_encs(rb_ascii8bit_encoding(), NULL, &enc, &enc2, fmode);
-        }
         v = rb_hash_aref(opthash, sym_perm);
         if (!NIL_P(v)) {
             if (vperm_p) {
@@ -7035,20 +7004,30 @@ rb_io_extract_modeenc(VALUE *vmode_p, VALUE *vperm_p, VALUE opthash,
                 /* perm no use, just ignore */
             }
         }
-        ecflags = (fmode & FMODE_READABLE) ?
-            MODE_BTMODE(ECONV_DEFAULT_NEWLINE_DECORATOR,
-                        0, ECONV_UNIVERSAL_NEWLINE_DECORATOR) : 0;
+    }
+
+    if (fmode & FMODE_BINMODE) {
+#ifdef O_BINARY
+        oflags |= O_BINARY;
+#endif
+        if (!has_enc)
+            rb_io_ext_int_to_encs(rb_ascii8bit_encoding(), NULL, &enc, &enc2, fmode);
+    }
+    ecflags = (fmode & FMODE_READABLE) ?
+        MODE_BTMODE(ECONV_DEFAULT_NEWLINE_DECORATOR,
+                    0, ECONV_UNIVERSAL_NEWLINE_DECORATOR) : 0;
 #ifdef TEXTMODE_NEWLINE_DECORATOR_ON_WRITE
-        ecflags |= (fmode & FMODE_WRITABLE) ?
-            MODE_BTMODE(TEXTMODE_NEWLINE_DECORATOR_ON_WRITE,
-                        0, TEXTMODE_NEWLINE_DECORATOR_ON_WRITE) : 0;
+    ecflags |= (fmode & FMODE_WRITABLE) ?
+        MODE_BTMODE(TEXTMODE_NEWLINE_DECORATOR_ON_WRITE,
+                    0, TEXTMODE_NEWLINE_DECORATOR_ON_WRITE) : 0;
 #endif
 #if DEFAULT_TEXTMODE
-        if (!(fmode & FMODE_BINMODE) && NIL_P(vmode)) {
-            fmode |= DEFAULT_TEXTMODE;
-        }
+    if (!(fmode & FMODE_BINMODE) && NIL_P(vmode)) {
+        fmode |= DEFAULT_TEXTMODE;
+    }
 #endif
 
+    if (!NIL_P(opthash)) {
         if (rb_io_extract_encoding_option(opthash, &enc, &enc2, &fmode)) {
             if (has_enc) {
                 rb_raise(rb_eArgError, "encoding specified twice");
@@ -7056,6 +7035,10 @@ rb_io_extract_modeenc(VALUE *vmode_p, VALUE *vperm_p, VALUE opthash,
         }
         SET_UNIVERSAL_NEWLINE_DECORATOR_IF_ENC2(enc2, ecflags);
         ecflags = rb_econv_prepare_options(opthash, &ecopts, ecflags);
+    }
+    else {
+        SET_UNIVERSAL_NEWLINE_DECORATOR_IF_ENC2(enc2, ecflags);
+        ecopts = Qnil;
     }
 
     validate_enc_binmode(&fmode, ecflags, enc, enc2);
