@@ -168,6 +168,98 @@ EOT
     }
   end
 
+  def test_open_modeenc_comprehensive_matrix
+    # Exercise rb_io_extract_modeenc through many open() forms so that any
+    # side effect of the refactor (hoisting common handling out of the
+    # opthash branch) shows up as a changed observable behaviour.
+    with_tmpdir {
+      crlf = /mswin|mingw/ =~ RUBY_PLATFORM
+
+      # read translation: [pos_args, kw_args, raw_file, expected_crlf, expected_other]
+      read_cases = [
+        [[],          {},                      "a\r\nb\r\nc", "a\nb\nc",     "a\r\nb\r\nc"],
+        [["r"],       {},                      "a\r\nb\r\nc", "a\nb\nc",     "a\r\nb\r\nc"],
+        [["rt"],      {},                      "a\r\nb\r\nc", "a\nb\nc",     "a\nb\nc"],
+        [["rb"],      {},                      "a\r\nb\r\nc", "a\r\nb\r\nc", "a\r\nb\r\nc"],
+        [[],          {encoding: "utf-8"},     "a\r\nb\r\nc", "a\nb\nc",     "a\r\nb\r\nc"],
+        [[],          {encoding: "utf-8"},     "a\rb\rc",     "a\rb\rc",     "a\rb\rc"],
+        [["r"],       {encoding: "utf-8"},     "a\r\nb\r\nc", "a\nb\nc",     "a\r\nb\r\nc"],
+        [["rb"],      {encoding: "utf-8"},     "a\r\nb\r\nc", "a\r\nb\r\nc", "a\r\nb\r\nc"],
+        [[],          {mode: "r"},             "a\r\nb\r\nc", "a\nb\nc",     "a\r\nb\r\nc"],
+        [[],          {mode: "rb"},            "a\r\nb\r\nc", "a\r\nb\r\nc", "a\r\nb\r\nc"],
+        [[],          {mode: "r", encoding: "utf-8"}, "a\r\nb\r\nc", "a\nb\nc", "a\r\nb\r\nc"],
+        [[],          {flags: File::RDONLY},   "a\r\nb\r\nc", "a\nb\nc",     "a\r\nb\r\nc"],
+        [["r"],       {newline: :universal},   "a\r\nb\r\nc", "a\nb\nc",     "a\nb\nc"],
+        [["r"],       {newline: :universal},   "a\rb\rc",     "a\nb\nc",     "a\nb\nc"],
+        [["r"],       {newline: :crlf},        "a\r\nb\r\nc", "a\nb\nc",     "a\r\nb\r\nc"],
+        [["r"],       {newline: :lf},          "a\r\nb\r\nc", "a\r\nb\r\nc", "a\r\nb\r\nc"],
+        [["r"],       {encoding: "utf-8", newline: :universal}, "a\rb\rc", "a\nb\nc", "a\nb\nc"],
+        [["r"],       {encoding: "utf-8", newline: :lf},       "a\r\nb\r\nc", "a\r\nb\r\nc", "a\r\nb\r\nc"],
+        [["r"],       {binmode: true},         "a\r\nb\r\nc", "a\r\nb\r\nc", "a\r\nb\r\nc"],
+        [["r"],       {textmode: true},        "a\r\nb\r\nc", "a\nb\nc",     "a\nb\nc"],
+        [["r+"],      {},                      "a\r\nb\r\nc", "a\nb\nc",     "a\r\nb\r\nc"],
+      ]
+      read_cases.each do |pos, kw, raw, exp_crlf, exp_other|
+        generate_file('tmp', raw)
+        actual = open("tmp", *pos, **kw) {|f| f.read }
+        assert_equal(crlf ? exp_crlf : exp_other, actual,
+                     "read #{pos.inspect} #{kw.inspect} of #{raw.inspect}")
+      end
+
+      # write translation: [pos_args, kw_args, content, expected_raw_crlf, expected_raw_other]
+      write_cases = [
+        [["w"],                   {},                      "a\nb\nc",     "a\r\nb\r\nc",   "a\nb\nc"],
+        [["wt"],                  {},                      "a\nb\nc",     "a\r\nb\r\nc",   "a\nb\nc"],
+        [["wb"],                  {},                      "a\nb\nc",     "a\nb\nc",       "a\nb\nc"],
+        [["w"],                   {encoding: "utf-8"},     "a\nb\nc",     "a\r\nb\r\nc",   "a\nb\nc"],
+        [["w"],                   {newline: :lf},          "a\nb\nc",     "a\nb\nc",       "a\nb\nc"],
+        [["w"],                   {newline: :crlf},        "a\nb\nc",     "a\r\nb\r\nc",   "a\r\nb\r\nc"],
+        [["w"],                   {newline: :universal},   "a\nb\nc",     "a\nb\nc",       "a\nb\nc"],
+        [["w"],                   {binmode: true},         "a\nb\nc",     "a\nb\nc",       "a\nb\nc"],
+        [[],                     {mode: "w", encoding: "utf-8"}, "a\nb\nc", "a\r\nb\r\nc", "a\nb\nc"],
+      ]
+      write_cases.each do |pos, kw, content, exp_crlf, exp_other|
+        open("tmp", *pos, **kw) {|f| f.write content }
+        raw = File.binread("tmp")
+        assert_equal(crlf ? exp_crlf : exp_other, raw,
+                     "write #{pos.inspect} #{kw.inspect} of #{content.inspect}")
+      end
+
+      # encoding: [pos_args, kw_args, external, internal]
+      enc_cases = [
+        [["r"],                          {encoding: "utf-8"},                     Encoding::UTF_8, nil],
+        [["r:utf-8"],                    {},                                      Encoding::UTF_8, nil],
+        [["r:utf-8:us-ascii"],           {},                                      Encoding::UTF_8, Encoding::US_ASCII],
+        [[],                            {encoding: "utf-8:us-ascii"},            Encoding::UTF_8, Encoding::US_ASCII],
+        [[],                            {external_encoding: "utf-8", internal_encoding: "us-ascii"}, Encoding::UTF_8, Encoding::US_ASCII],
+        [["rb"],                         {},                                      Encoding::ASCII_8BIT, nil],
+        [["rb"],                         {encoding: "utf-8"},                     Encoding::UTF_8, nil],
+        [[],                            {mode: "r", encoding: "utf-8"},          Encoding::UTF_8, nil],
+      ]
+      enc_cases.each do |pos, kw, ext, int|
+        open("tmp", *pos, **kw) {|f|
+          assert_equal(ext, f.external_encoding, "external_encoding #{pos.inspect} #{kw.inspect}")
+          assert_equal(int, f.internal_encoding, "internal_encoding #{pos.inspect} #{kw.inspect}")
+        }
+      end
+
+      # error conditions: [pos_args, kw_args, message_regexp]
+      err_cases = [
+        [["r"],            {mode: "r"},             /mode specified twice/],
+        [["r:utf-8"],      {encoding: "utf-8"},     /encoding specified twice/],
+        [["rb"],           {newline: :crlf},        /newline decorator with binary mode/],
+        [["w", 0600],      {perm: 0600},            /perm specified twice/],
+      ]
+      err_cases.each do |pos, kw, re|
+        generate_file('tmp', "")
+        e = assert_raise(ArgumentError, "open(#{pos.inspect}, #{kw.inspect})") {
+          open("tmp", *pos, **kw) {|f| f.read }
+        }
+        assert_match(re, e.message, "open(#{pos.inspect}, #{kw.inspect})")
+      end
+    }
+  end
+
   def test_open_r_encname_in_opt
     with_tmpdir {
       generate_file('tmp', "")
