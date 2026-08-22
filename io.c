@@ -6935,7 +6935,7 @@ rb_io_extract_modeenc(VALUE *vmode_p, VALUE *vperm_p, VALUE opthash,
     rb_encoding *enc, *enc2;
     int ecflags;
     VALUE ecopts;
-    int has_enc = 0, has_vmode = 0;
+    int has_enc = 0;
     VALUE intmode;
 
     vmode = *vmode_p;
@@ -6943,7 +6943,16 @@ rb_io_extract_modeenc(VALUE *vmode_p, VALUE *vperm_p, VALUE opthash,
     /* Set to defaults */
     rb_io_ext_int_to_encs(NULL, NULL, &enc, &enc2, 0);
 
-  vmode_handle:
+    if (!NIL_P(opthash)) {
+        VALUE v = rb_hash_aref(opthash, sym_mode);
+        if (!NIL_P(v)) {
+            if (!NIL_P(vmode)) {
+                rb_raise(rb_eArgError, "mode specified twice");
+            }
+            vmode = v;
+        }
+    }
+
     if (NIL_P(vmode)) {
         fmode = FMODE_READABLE;
         oflags = O_RDONLY;
@@ -6999,17 +7008,6 @@ rb_io_extract_modeenc(VALUE *vmode_p, VALUE *vperm_p, VALUE opthash,
     }
     else {
         VALUE v;
-        if (!has_vmode) {
-            v = rb_hash_aref(opthash, sym_mode);
-            if (!NIL_P(v)) {
-                if (!NIL_P(vmode)) {
-                    rb_raise(rb_eArgError, "mode specified twice");
-                }
-                has_vmode = 1;
-                vmode = v;
-                goto vmode_handle;
-            }
-        }
         v = rb_hash_aref(opthash, sym_flags);
         if (!NIL_P(v)) {
             v = rb_to_int(v);
