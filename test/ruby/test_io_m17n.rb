@@ -153,6 +153,21 @@ EOT
     }
   end
 
+  def test_open_enc_in_opt_default_textmode_newline
+    # open(name, encoding: ...) must apply the same default text-mode
+    # on Windows.
+    bug21691 = '[ruby-core:12382][Bug #21691]'
+    with_tmpdir {
+      generate_file('tmp', "a\rb\r\nc\n")
+      expected = open("tmp") {|f| f.read }
+      actual = open("tmp", encoding: "utf-8") {|f| f.read }
+      assert_equal(expected, actual, bug21691)
+      if /mswin|mingw/ =~ RUBY_PLATFORM
+        assert_equal("a\rb\nc\n", actual, bug21691)
+      end
+    }
+  end
+
   def test_open_r_encname_in_opt
     with_tmpdir {
       generate_file('tmp', "")
