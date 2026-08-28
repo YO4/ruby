@@ -457,6 +457,19 @@ class TestIO < Test::Unit::TestCase
     end
   end
 
+  def test_ctrlz_ungetbyte_in_text_mode
+    omit unless /mingw|mswin/ =~ RUBY_PLATFORM
+
+    mkcdtmpdir do
+      File.binwrite("ctrlz.txt", "abc")
+      File.open("ctrlz.txt", "r") do |f|
+        assert_equal("a".ord, f.getbyte)
+        f.ungetbyte(0x1a)
+        assert_equal("\x1abc", f.read)
+      end
+    end
+  end
+
   def test_getbyte_after_rewind_with_pending_char
     bug22239 = '[Bug #22239]'
     make_tempfile {|t|

@@ -65,6 +65,9 @@ struct rb_io {
      */
     rb_io_buffer_t rbuf;
 
+    /** Boundary of ungotten characters in rbuf */
+    int rbuf_off_unget;
+
     /**
      * Duplex IO object, if set.
      *

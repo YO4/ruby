@@ -894,6 +894,7 @@ io_unread(rb_io_t *fptr, bool discard_rbuf)
   end:
     fptr->rbuf.off = 0;
     fptr->rbuf.len = 0;
+    fptr->rbuf_off_unget = 0;
     clear_codeconv(fptr);
     return;
 }
@@ -909,6 +910,7 @@ io_ungetbyte(VALUE str, rb_io_t *fptr)
         const int min_capa = IO_RBUF_CAPA_FOR(fptr);
         fptr->rbuf.off = 0;
         fptr->rbuf.len = 0;
+        fptr->rbuf_off_unget = 0;
 #if SIZEOF_LONG > SIZEOF_INT
         if (len > INT_MAX)
             rb_raise(rb_eIOError, "ungetbyte failed");
@@ -926,8 +928,11 @@ io_ungetbyte(VALUE str, rb_io_t *fptr)
         MEMMOVE(fptr->rbuf.ptr+fptr->rbuf.capa-fptr->rbuf.len,
                 fptr->rbuf.ptr+fptr->rbuf.off,
                 char, fptr->rbuf.len);
+        fptr->rbuf_off_unget += fptr->rbuf.capa-fptr->rbuf.len-fptr->rbuf.off;
         fptr->rbuf.off = fptr->rbuf.capa-fptr->rbuf.len;
     }
+    if (fptr->rbuf_off_unget < fptr->rbuf.off)
+        fptr->rbuf_off_unget = fptr->rbuf.off;
     fptr->rbuf.off-=(int)len;
     fptr->rbuf.len+=(int)len;
     MEMMOVE(fptr->rbuf.ptr+fptr->rbuf.off, RSTRING_PTR(str), char, len);
@@ -2622,12 +2627,14 @@ io_fill_rbuf(rb_io_t *fptr, bool append)
     if (fptr->rbuf.ptr == NULL) {
         fptr->rbuf.off = 0;
         fptr->rbuf.len = 0;
+        fptr->rbuf_off_unget = 0;
         fptr->rbuf.capa = IO_RBUF_CAPA_FOR(fptr);
         fptr->rbuf.ptr = ALLOC_N(char, fptr->rbuf.capa);
     }
     RUBY_ASSERT(!append || fptr->rbuf.off == 0);
     RUBY_ASSERT(!append || fptr->rbuf.len < fptr->rbuf.capa);
-    if (fptr->rbuf.len == 0 || append) {
+    if (fptr->rbuf.len == 0 || (append && fptr->rbuf.off == 0)) {
+        fptr->rbuf_off_unget = 0;
       retry:
         r = rb_io_read_memory(fptr, fptr->rbuf.ptr + fptr->rbuf.len,
             fptr->rbuf.capa - fptr->rbuf.len);
@@ -2711,7 +2718,8 @@ rb_io_eof(VALUE io)
             return Qtrue;
         }
         if (READ_DATA_PENDING(fptr) &&
-            *READ_DATA_PENDING_PTR(fptr) == CTRLZ) {
+            *READ_DATA_PENDING_PTR(fptr) == CTRLZ &&
+            fptr->rbuf.off >= fptr->rbuf_off_unget) {
             return Qtrue;
         }
         return Qfalse;
@@ -3215,8 +3223,9 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
         READ_CHECK(fptr);
         if (io_fill_rbuf(fptr, pending_cr) < 0) {
             if (pending_cr) {
-                fptr->rbuf.off++;
-                fptr->rbuf.len--;
+                fptr->rbuf.off = 0;
+                fptr->rbuf.len = 0;
+                fptr->rbuf_off_unget = 0;
                 *dp = '\r';
                 fptr->cbuf.len++;
                 return MORE_CHAR_SUSPENDED;
@@ -3227,7 +3236,8 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
     }
     ss = sp = (const unsigned char *)fptr->rbuf.ptr + fptr->rbuf.off;
     se = sp + fptr->rbuf.len;
-    if (*sp == CTRLZ) {
+    const unsigned char *rbuf_unget_end = (const unsigned char *)fptr->rbuf.ptr + fptr->rbuf_off_unget;
+    if (*sp == CTRLZ && sp >= rbuf_unget_end) {
         return MORE_CHAR_FINISHED;
     }
     if (fptr->rbuf.len > 1 && *sp == '\r' && *(sp + 1) == '\n') {
@@ -3239,6 +3249,7 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
         fptr->rbuf.off = 0;
         fptr->rbuf.len = 1;
         fptr->rbuf.ptr[fptr->rbuf.off] = '\r';
+        fptr->rbuf_off_unget = 0;
         pending_cr = true;
         goto read_more;
     }
@@ -3247,7 +3258,7 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
     }
 
     while (sp + 1 < se && dp < de) {
-        if (*sp == CTRLZ) {
+        if (*sp == CTRLZ && sp >= rbuf_unget_end) {
             goto end;
         }
         if (*sp == '\r' && *(sp + 1) == '\n') {
@@ -3261,7 +3272,7 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
             *dp++ = *sp++;
         }
     }
-    if (sp < se && dp < de && *sp != '\r' && *sp != CTRLZ) {
+    if (sp < se && dp < de && *sp != '\r' && (*sp != CTRLZ || sp < rbuf_unget_end)) {
         *dp++ = *sp++;
     }
 
@@ -3306,6 +3317,7 @@ fill_cbuf_with_universal_newline(rb_io_t *fptr, int ec_flags)
             fptr->rbuf.off = 0;
             fptr->rbuf.len = 1;
             fptr->rbuf.ptr[fptr->rbuf.off] = '\r';
+            fptr->rbuf_off_unget = 0;
             pending_cr = true;
             goto read_more;
         }
@@ -3565,14 +3577,14 @@ io_readconv_universal_newline_inplace(unsigned char *ptr, long rend, long conv_l
 #if RUBY_CRLF_ENVIRONMENT
 static long
 io_readconv_crlf_newline_inplace(unsigned char *ptr, long rend, long conv_len,
-                                 long *remains)
+                                 long *remains, long *ctrlz, long ctrlz_ungotten_end)
 {
     long sp = conv_len;
     *remains = 0;
     // Fast path
     // while no CRLF has been collapsed (sp == dp) a single cursor is enough
     while (sp < rend) {
-        if (ptr[sp] == CTRLZ) {
+        if (ptr[sp] == CTRLZ && sp >= ctrlz_ungotten_end) {
             *ctrlz = sp;
             break;
         }
@@ -3590,7 +3602,7 @@ io_readconv_crlf_newline_inplace(unsigned char *ptr, long rend, long conv_len,
     // Slow path
     long dp = sp;
     while (sp < rend) {
-        if (ptr[sp] == CTRLZ) {
+        if (ptr[sp] == CTRLZ && sp >= ctrlz_ungotten_end) {
             *ctrlz = sp;
             break;
         }
@@ -3609,6 +3621,40 @@ io_readconv_crlf_newline_inplace(unsigned char *ptr, long rend, long conv_len,
         ptr[dp++] = ptr[sp++];
     }
     return dp;
+}
+
+static void
+io_unread_ctrlz(rb_io_t *fptr, VALUE str, long end, long ctrlz)
+{
+    long const putback = end - ctrlz;
+    long const rbuf_capa = fptr->rbuf.ptr ? fptr->rbuf.capa : IO_RBUF_CAPA_MIN;
+    long keep = putback;
+
+    if (putback > rbuf_capa) {
+        errno = 0;
+        // Only rbuf_capa bytes of the putback can be kept in rbuf.  Seek
+        // the fd back so that it re-delivers the rest.
+        rb_off_t const overflow = putback - rbuf_capa;
+        if (!(lseek(fptr->fd, -overflow, SEEK_CUR) < 0 && errno)) {
+            keep = rbuf_capa;
+        }
+    }
+
+    if (fptr->rbuf.ptr == NULL) {
+        long const keep_capa = keep < IO_RBUF_CAPA_MIN ? IO_RBUF_CAPA_MIN : keep;
+        fptr->rbuf.ptr = ALLOC_N(char, keep_capa);
+        fptr->rbuf.capa = (int)keep_capa;
+    }
+
+    // rbuf has been consumed by read_all before the loop and is empty
+    // here.  keep never exceeds rbuf_capa: read_all reads at most
+    // min(BUFSIZ, rbuf_capa) bytes per chunk (remain_size returns zero
+    // for non-seekable media), and on a seekable fd the putback overflow
+    // is seeked back above.  So the putback always fits in rbuf.
+    fptr->rbuf.off = 0;
+    fptr->rbuf.len = (int)keep;
+    fptr->rbuf_off_unget = 0;
+    memmove(fptr->rbuf.ptr, RSTRING_PTR(str) + ctrlz, (size_t)keep);
 }
 #endif
 
@@ -3656,6 +3702,10 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
                 conv_len = 0;
             }
 
+            long ctrlz_ungotten_end = 0;
+            if (fptr->rbuf.ptr != NULL && fptr->rbuf.off < fptr->rbuf_off_unget)
+                ctrlz_ungotten_end = conv_len + (fptr->rbuf_off_unget - fptr->rbuf.off);
+
             /* Consume all bytes buffered in rbuf into str before the loop,
              * so that rbuf is empty during the loop and io_fread reads
              * from the fd directly without refilling rbuf.  The drained
@@ -3699,9 +3749,15 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
 #if RUBY_CRLF_ENVIRONMENT
                 else
                 {
+                    long ctrlz = -1;
                     conv_len = io_readconv_crlf_newline_inplace(
                         (unsigned char *)RSTRING_PTR(str), end, conv_len,
-                        &remains);
+                        &remains, &ctrlz, ctrlz_ungotten_end);
+                    if (ctrlz >= 0) {
+                        io_unread_ctrlz(fptr, str, end, ctrlz);
+                        break;
+                    }
+                    ctrlz_ungotten_end = 0;  // ungotten data fully consumed
                 }
 #endif
 
@@ -8857,7 +8913,7 @@ rb_io_reopen(int argc, VALUE *argv, VALUE file)
         if (io_fflush(fptr) < 0)
             rb_sys_fail_on_write(fptr);
     }
-    fptr->rbuf.off = fptr->rbuf.len = 0;
+    fptr->rbuf.off = fptr->rbuf.len = fptr->rbuf_off_unget = 0;
     clear_codeconv(fptr);
 
     if (fptr->stdio_file) {
@@ -9779,6 +9835,7 @@ rb_io_fptr_new(void)
     rb_io_buffer_init(&fp->wbuf);
     rb_io_buffer_init(&fp->rbuf);
     rb_io_buffer_init(&fp->cbuf);
+    fp->rbuf_off_unget = 0;
     fp->cbuf_off_unget = 0;
     fp->readconv = NULL;
     fp->writeconv = NULL;
