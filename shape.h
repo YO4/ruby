@@ -153,7 +153,7 @@ rb_shape_max_capacity(void)
 static inline shape_id_t
 RBASIC_SHAPE_ID(VALUE obj)
 {
-    RUBY_ASSERT(!RB_SPECIAL_CONST_P(obj));
+    RUBY_ASSERT(!WSPECIAL_CONST_P(obj));
     RUBY_ASSERT(!RB_TYPE_P(obj, T_IMEMO) || IMEMO_TYPE_P(obj, imemo_fields));
 #if RBASIC_SHAPE_ID_FIELD
     return (shape_id_t)((RBASIC(obj)->shape_id));
@@ -226,7 +226,7 @@ rb_obj_shape_extended_p(VALUE obj)
 static inline void
 RBASIC_SET_FULL_SHAPE_ID(VALUE obj, shape_id_t shape_id)
 {
-    RUBY_ASSERT(!RB_SPECIAL_CONST_P(obj));
+    RUBY_ASSERT(!WSPECIAL_CONST_P(obj));
     RUBY_ASSERT(!RB_TYPE_P(obj, T_IMEMO) || IMEMO_TYPE_P(obj, imemo_fields));
 
     RBASIC_SET_FULL_SHAPE_ID_NO_CHECKS(obj, shape_id);
@@ -249,7 +249,7 @@ RBASIC_SET_SHAPE_ID_WITH_LAYOUT(VALUE obj, shape_id_t target_shape_id, shape_id_
 static inline void
 RBASIC_SET_SHAPE_ID(VALUE obj, shape_id_t shape_id)
 {
-    RUBY_ASSERT(!RB_SPECIAL_CONST_P(obj));
+    RUBY_ASSERT(!WSPECIAL_CONST_P(obj));
 
     RBASIC_SET_FULL_SHAPE_ID(obj, (
         (shape_id & ~SHAPE_ID_FL_PRIVATE_MASK) |
@@ -308,7 +308,7 @@ rb_shape_complex_p(shape_id_t shape_id)
 static inline bool
 rb_obj_shape_complex_p(VALUE obj)
 {
-    return !RB_SPECIAL_CONST_P(obj) && rb_shape_complex_p(RBASIC_SHAPE_ID(obj));
+    return !WSPECIAL_CONST_P(obj) && rb_shape_complex_p(RBASIC_SHAPE_ID(obj));
 }
 
 static inline bool

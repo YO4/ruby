@@ -207,7 +207,7 @@ vm_check_frame(VALUE type,
                const rb_iseq_t *iseq)
 {
     VALUE given_magic = type & VM_FRAME_MAGIC_MASK;
-    VM_ASSERT(FIXNUM_P(type));
+    VM_ASSERT(WFIXNUM_P(type));
 
 #define CHECK(magic, req_block, req_me, req_cref, is_cframe) \
     case magic: \
@@ -520,7 +520,7 @@ vm_env_write_slowpath(const VALUE *ep, int index, VALUE v)
         /* Writing to a SHAREABLE env (an isolated proc) can create a shareable ->
          * unshareable edge; only a full barrier sets the shref bit keeping v alive
          * through its owner's local GC.  WB_REQUIRED stays: later writes need it too. */
-        if (!SPECIAL_CONST_P(v)) {
+        if (!WSPECIAL_CONST_P(v)) {
             rb_gc_writebarrier(envval, v);
         }
         VM_FORCE_WRITE(&ep[index], v);
@@ -607,7 +607,7 @@ lep_svar_in_env_p(const rb_execution_context_t *ec, const VALUE *lep)
     /* lep may be a stale on-stack ep of a frame whose env already escaped: lep[0]
      * still holds the imemo_env, so flags is not a FIXNUM and VM_ENV_ESCAPED_P
      * asserts.  That is not a live shareable proc's env, so fall back to in-env. */
-    if (FIXNUM_P(lep[VM_ENV_DATA_INDEX_FLAGS]) &&
+    if (WFIXNUM_P(lep[VM_ENV_DATA_INDEX_FLAGS]) &&
             VM_ENV_ESCAPED_P(lep) &&
             RB_FL_TEST_RAW(VM_ENV_ENVVAL(lep), RUBY_FL_SHAREABLE)) {
         return false;
@@ -1244,7 +1244,7 @@ vm_getivar(VALUE obj, ID id, const rb_iseq_t *iseq, IVC ic, const struct rb_call
 {
     VALUE fields_obj;
 #if OPT_IC_FOR_IVAR
-    if (SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
         return default_value;
     }
 
@@ -1615,7 +1615,7 @@ vm_getinstancevariable(const rb_iseq_t *iseq, VALUE obj, ID id, IVC ic)
 static inline void
 vm_setinstancevariable(const rb_iseq_t *iseq, VALUE obj, ID id, VALUE val, IVC ic)
 {
-    if (RB_SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
         rb_error_frozen_object(obj);
         return;
     }
@@ -1657,7 +1657,7 @@ vm_throw_continue(const rb_execution_context_t *ec, VALUE err)
 {
     /* continue throw */
 
-    if (FIXNUM_P(err)) {
+    if (WFIXNUM_P(err)) {
         ec->tag->state = RUBY_TAG_FATAL;
     }
     else if (SYMBOL_P(err)) {
@@ -2225,7 +2225,7 @@ rb_vm_search_method_slowpath(const struct rb_callinfo *ci, VALUE klass)
 {
     const struct rb_callcache *cc;
 
-    VM_ASSERT(!SPECIAL_CONST_P(klass));
+    VM_ASSERT(!WSPECIAL_CONST_P(klass));
 
     if (RB_BUILTIN_TYPE(klass) == T_NONE) {
       // If we find a T_NONE here, it's most likely we called CLASS_OF(obj) on a
@@ -2435,7 +2435,7 @@ rb_vm_method_cfunc_is(const rb_iseq_t *iseq, CALL_DATA cd, VALUE recv, cfunc_typ
 static inline bool
 FIXNUM_2_P(VALUE a, VALUE b)
 {
-    /* FIXNUM_P(a) && FIXNUM_P(b)
+    /* WFIXNUM_P(a) && WFIXNUM_P(b)
      * == ((a & 1) && (b & 1))
      * == a & b & 1 */
     SIGNED_VALUE x = a;
@@ -2473,7 +2473,7 @@ opt_equality_specialized(VALUE recv, VALUE obj)
     else if (STATIC_SYM_P(recv) && STATIC_SYM_P(obj) && EQ_UNREDEFINED_P(SYMBOL)) {
         goto compare_by_identity;
     }
-    else if (SPECIAL_CONST_P(recv)) {
+    else if (WSPECIAL_CONST_P(recv)) {
         //
     }
     else if (RBASIC_CLASS(recv) == rb_cFloat && RB_FLOAT_TYPE_P(obj) && EQ_UNREDEFINED_P(FLOAT)) {
@@ -5836,7 +5836,7 @@ vm_check_keyword(lindex_t bits, lindex_t idx, const VALUE *ep)
 {
     const VALUE kw_bits = *(ep - bits);
 
-    if (FIXNUM_P(kw_bits)) {
+    if (WFIXNUM_P(kw_bits)) {
         unsigned int b = (unsigned int)FIX2ULONG(kw_bits);
         if ((idx < VM_KW_SPECIFIED_BITS_MAX) && (b & (0x01 << idx)))
             return Qfalse;
@@ -6750,7 +6750,7 @@ vm_case_dispatch(CDHASH hash, OFFSET else_offset, VALUE key)
             if (RB_FLOAT_TYPE_P(key)) {
                 double kval = RFLOAT_VALUE(key);
                 if (!isinf(kval) && modf(kval, &kval) == 0.0) {
-                    key = FIXABLE(kval) ? LONG2FIX((long)kval) : rb_dbl2big(kval);
+                    key = RBIMPL_FIXABLE(kval) ? rb_int2inum((SIGNED_VALUE)kval) : rb_dbl2big(kval);
                 }
             }
             if (st_lookup(rb_imemo_cdhash_tbl(hash), key, &val)) {
@@ -6798,7 +6798,7 @@ vm_opt_plus(VALUE recv, VALUE obj)
              OP_UNREDEFINED_P(PLUS, FLOAT)) {
         return DBL2NUM(RFLOAT_VALUE(recv) + RFLOAT_VALUE(obj));
     }
-    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+    else if (WSPECIAL_CONST_P(recv) || WSPECIAL_CONST_P(obj)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cFloat &&
@@ -6832,7 +6832,7 @@ vm_opt_minus(VALUE recv, VALUE obj)
              OP_UNREDEFINED_P(MINUS, FLOAT)) {
         return DBL2NUM(RFLOAT_VALUE(recv) - RFLOAT_VALUE(obj));
     }
-    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+    else if (WSPECIAL_CONST_P(recv) || WSPECIAL_CONST_P(obj)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cFloat &&
@@ -6856,7 +6856,7 @@ vm_opt_mult(VALUE recv, VALUE obj)
              OP_UNREDEFINED_P(MULT, FLOAT)) {
         return DBL2NUM(RFLOAT_VALUE(recv) * RFLOAT_VALUE(obj));
     }
-    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+    else if (WSPECIAL_CONST_P(recv) || WSPECIAL_CONST_P(obj)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cFloat &&
@@ -6874,13 +6874,13 @@ vm_opt_div(VALUE recv, VALUE obj)
 {
     if (FIXNUM_2_P(recv, obj) &&
         OP_UNREDEFINED_P(DIV, INTEGER)) {
-        return (FIX2LONG(obj) == 0) ? Qundef : rb_fix_div_fix(recv, obj);
+        return (FIX2SV(obj) == 0) ? Qundef : rb_fix_div_fix(recv, obj);
     }
     else if (FLONUM_2_P(recv, obj) &&
              OP_UNREDEFINED_P(DIV, FLOAT)) {
         return rb_flo_div_flo(recv, obj);
     }
-    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+    else if (WSPECIAL_CONST_P(recv) || WSPECIAL_CONST_P(obj)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cFloat &&
@@ -6898,13 +6898,13 @@ vm_opt_mod(VALUE recv, VALUE obj)
 {
     if (FIXNUM_2_P(recv, obj) &&
         OP_UNREDEFINED_P(MOD, INTEGER)) {
-        return (FIX2LONG(obj) == 0) ? Qundef : rb_fix_mod_fix(recv, obj);
+        return (FIX2SV(obj) == 0) ? Qundef : rb_fix_mod_fix(recv, obj);
     }
     else if (FLONUM_2_P(recv, obj) &&
              OP_UNREDEFINED_P(MOD, FLOAT)) {
         return DBL2NUM(ruby_float_mod(RFLOAT_VALUE(recv), RFLOAT_VALUE(obj)));
     }
-    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+    else if (WSPECIAL_CONST_P(recv) || WSPECIAL_CONST_P(obj)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cFloat &&
@@ -6942,7 +6942,7 @@ vm_opt_lt(VALUE recv, VALUE obj)
              OP_UNREDEFINED_P(LT, FLOAT)) {
         return RBOOL(RFLOAT_VALUE(recv) < RFLOAT_VALUE(obj));
     }
-    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+    else if (WSPECIAL_CONST_P(recv) || WSPECIAL_CONST_P(obj)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cFloat &&
@@ -6966,7 +6966,7 @@ vm_opt_le(VALUE recv, VALUE obj)
              OP_UNREDEFINED_P(LE, FLOAT)) {
         return RBOOL(RFLOAT_VALUE(recv) <= RFLOAT_VALUE(obj));
     }
-    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+    else if (WSPECIAL_CONST_P(recv) || WSPECIAL_CONST_P(obj)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cFloat &&
@@ -6990,7 +6990,7 @@ vm_opt_gt(VALUE recv, VALUE obj)
              OP_UNREDEFINED_P(GT, FLOAT)) {
         return RBOOL(RFLOAT_VALUE(recv) > RFLOAT_VALUE(obj));
     }
-    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+    else if (WSPECIAL_CONST_P(recv) || WSPECIAL_CONST_P(obj)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cFloat &&
@@ -7014,7 +7014,7 @@ vm_opt_ge(VALUE recv, VALUE obj)
              OP_UNREDEFINED_P(GE, FLOAT)) {
         return RBOOL(RFLOAT_VALUE(recv) >= RFLOAT_VALUE(obj));
     }
-    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+    else if (WSPECIAL_CONST_P(recv) || WSPECIAL_CONST_P(obj)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cFloat &&
@@ -7031,7 +7031,7 @@ vm_opt_ge(VALUE recv, VALUE obj)
 static VALUE
 vm_opt_ltlt(VALUE recv, VALUE obj)
 {
-    if (SPECIAL_CONST_P(recv)) {
+    if (WSPECIAL_CONST_P(recv)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cString &&
@@ -7061,7 +7061,7 @@ vm_opt_and(VALUE recv, VALUE obj)
     // will be 0, and we return Qundef.
     VALUE ret = ((SIGNED_VALUE) recv) & ((SIGNED_VALUE) obj);
 
-    if (FIXNUM_P(ret) &&
+    if (WFIXNUM_P(ret) &&
         OP_UNREDEFINED_P(AND, INTEGER)) {
         return ret;
     }
@@ -7085,7 +7085,7 @@ vm_opt_or(VALUE recv, VALUE obj)
 static VALUE
 vm_opt_aref(VALUE recv, VALUE obj)
 {
-    if (SPECIAL_CONST_P(recv)) {
+    if (WSPECIAL_CONST_P(recv)) {
         if (FIXNUM_2_P(recv, obj) &&
                 OP_UNREDEFINED_P(AREF, INTEGER)) {
             return rb_fix_aref(recv, obj);
@@ -7094,8 +7094,8 @@ vm_opt_aref(VALUE recv, VALUE obj)
     }
     else if (RBASIC_CLASS(recv) == rb_cArray &&
              OP_UNREDEFINED_P(AREF, ARRAY)) {
-        if (FIXNUM_P(obj)) {
-            return rb_ary_entry_internal(recv, FIX2LONG(obj));
+        if (WFIXNUM_P(obj)) {
+            return rb_ary_entry_internal(recv, FIX2SV(obj));
         }
         else {
             return rb_ary_aref1(recv, obj);
@@ -7113,13 +7113,13 @@ vm_opt_aref(VALUE recv, VALUE obj)
 static VALUE
 vm_opt_aset(VALUE recv, VALUE obj, VALUE set)
 {
-    if (SPECIAL_CONST_P(recv)) {
+    if (WSPECIAL_CONST_P(recv)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cArray &&
              OP_UNREDEFINED_P(ASET, ARRAY) &&
-             FIXNUM_P(obj)) {
-        rb_ary_store(recv, FIX2LONG(obj), set);
+             WFIXNUM_P(obj)) {
+        rb_ary_store(recv, FIX2SV(obj), set);
         return set;
     }
     else if (RBASIC_CLASS(recv) == rb_cHash &&
@@ -7135,7 +7135,7 @@ vm_opt_aset(VALUE recv, VALUE obj, VALUE set)
 static VALUE
 vm_opt_length(VALUE recv, int bop)
 {
-    if (SPECIAL_CONST_P(recv)) {
+    if (WSPECIAL_CONST_P(recv)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cString &&
@@ -7190,17 +7190,19 @@ vm_opt_nil_p(struct rb_control_frame_struct *reg_cfp, CALL_DATA cd, VALUE recv)
 static VALUE
 fix_succ(VALUE x)
 {
+    /* The sentinels must be VALUE-wide: on LLP64 `unsigned long' is narrower
+     * than VALUE and would miss the Fixnum_MAX overflow case. */
     switch (x) {
-      case ~0UL:
-        /* 0xFFFF_FFFF == INT2FIX(-1)
+      case (VALUE)RBIMPL_VALUE_FULL:
+        /* 0xFFFF_FFFF_FFFF_FFFF == INT2FIX(-1)
          * `-1.succ` is of course 0. */
         return INT2FIX(0);
-      case RSHIFT(~0UL, 1):
-        /* 0x7FFF_FFFF == LONG2FIX(0x3FFF_FFFF)
-         * 0x3FFF_FFFF + 1 == 0x4000_0000, which is a Bignum. */
-        return rb_uint2big(1UL << (SIZEOF_LONG * CHAR_BIT - 2));
+      case (VALUE)(RBIMPL_VALUE_FULL >> 1):
+        /* 0x7FFF_FFFF_FFFF_FFFF == encode(FIXNUM_MAX)
+         * MAX + 1 == FIXNUM_MIN - 1, which leaves the immediate range. */
+        return rb_uint2big((uintptr_t)RBIMPL_FIXNUM_MAX + 1);
       default:
-        /*    LONG2FIX(FIX2LONG(x)+FIX2LONG(y))
+        /*    LONG2FIX(FIX2SV(x)+FIX2SV(y))
          * == ((lx*2+1)/2 + (ly*2+1)/2)*2+1
          * == lx*2 + ly*2 + 1
          * == (lx*2+1) + (ly*2+1) - 1
@@ -7218,11 +7220,11 @@ fix_succ(VALUE x)
 static VALUE
 vm_opt_succ(VALUE recv)
 {
-    if (FIXNUM_P(recv) &&
+    if (WFIXNUM_P(recv) &&
         OP_UNREDEFINED_P(SUCC, INTEGER)) {
         return fix_succ(recv);
     }
-    else if (SPECIAL_CONST_P(recv)) {
+    else if (WSPECIAL_CONST_P(recv)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cString &&
@@ -7248,7 +7250,7 @@ vm_opt_not(struct rb_control_frame_struct *reg_cfp, CALL_DATA cd, VALUE recv)
 static VALUE
 vm_opt_regexpmatch2(VALUE recv, VALUE obj)
 {
-    if (SPECIAL_CONST_P(recv)) {
+    if (WSPECIAL_CONST_P(recv)) {
         return Qundef;
     }
     else if (RBASIC_CLASS(recv) == rb_cString &&

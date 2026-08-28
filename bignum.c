@@ -169,7 +169,16 @@ STATIC_ASSERT(sizeof_long_and_sizeof_bdigit, SIZEOF_BDIGIT % SIZEOF_LONG == 0);
 #define BARY_TRUNC(ds, n) do { \
         while (0 < (n) && (ds)[(n)-1] == 0) \
             (n)--; \
-    } while (0)
+} while (0)
+
+static inline VALUE
+rbimpl_big_normalize_fixnum(VALUE value)
+{
+    if (WFIXNUM_P(value) && !FIXNUM_P(value)) {
+        return rb_int2big(RBIMPL_FIXNUM_VALUE(value));
+    }
+    return value;
+}
 
 #define KARATSUBA_BALANCED(xn, yn) ((yn)/2 < (xn))
 #define TOOM3_BALANCED(xn, yn) (((yn)+2)/3 * 2 < (xn))
@@ -2978,8 +2987,8 @@ rb_cmpint(VALUE val, VALUE a, VALUE b)
     if (NIL_P(val)) {
         rb_cmperr_reason(a, b, "comparator returned nil");
     }
-    if (FIXNUM_P(val)) {
-        long l = FIX2LONG(val);
+    if (WFIXNUM_P(val)) {
+        SIGNED_VALUE l = RBIMPL_FIXNUM_VALUE(val);
         if (l > 0) return 1;
         if (l < 0) return -1;
         return 0;
@@ -3192,8 +3201,8 @@ bigfixize(VALUE x)
 {
     size_t n = BIGNUM_LEN(x);
     BDIGIT *ds = BDIGITS(x);
-#if SIZEOF_BDIGIT < SIZEOF_LONG
-    unsigned long u;
+#if SIZEOF_BDIGIT < SIZEOF_VALUE
+    uintptr_t u;
 #else
     BDIGIT u;
 #endif
@@ -3202,17 +3211,17 @@ bigfixize(VALUE x)
 
     if (n == 0) return INT2FIX(0);
 
-#if SIZEOF_BDIGIT < SIZEOF_LONG
-    if (sizeof(long)/SIZEOF_BDIGIT < n)
+#if SIZEOF_BDIGIT < SIZEOF_VALUE
+    if (sizeof(VALUE)/SIZEOF_BDIGIT < n)
         goto return_big;
     else {
         int i = (int)n;
         u = 0;
         while (i--) {
-            u = (unsigned long)(BIGUP(u) + ds[i]);
+            u = (uintptr_t)(BIGUP(u) + ds[i]);
         }
     }
-#else /* SIZEOF_BDIGIT >= SIZEOF_LONG */
+#else /* SIZEOF_BDIGIT >= SIZEOF_VALUE */
     if (1 < n)
         goto return_big;
     else
@@ -3220,10 +3229,12 @@ bigfixize(VALUE x)
 #endif
 
     if (BIGNUM_POSITIVE_P(x)) {
-        if (POSFIXABLE(u)) return LONG2FIX((long)u);
+        if (RBIMPL_POSFIXABLE(u)) return RBIMPL_FIXNUM_FROM_VALUE((SIGNED_VALUE)u);
     }
     else {
-        if (u <= -FIXNUM_MIN) return LONG2FIX(-(long)u);
+        if (u <= (uintptr_t)(-RBIMPL_FIXNUM_MIN)) {
+            return RBIMPL_FIXNUM_FROM_VALUE(-(SIGNED_VALUE)u);
+        }
     }
 
   return_big:
@@ -3292,14 +3303,14 @@ rb_int2big(intptr_t n)
 VALUE
 rb_uint2inum(uintptr_t n)
 {
-    if (POSFIXABLE(n)) return LONG2FIX(n);
+    if (RBIMPL_POSFIXABLE(n)) return RBIMPL_FIXNUM_FROM_VALUE((SIGNED_VALUE)n);
     return rb_uint2big(n);
 }
 
 VALUE
 rb_int2inum(intptr_t n)
 {
-    if (FIXABLE(n)) return LONG2FIX(n);
+    if (RBIMPL_FIXABLE(n)) return RBIMPL_FIXNUM_FROM_VALUE(n);
     return rb_int2big(n);
 }
 
@@ -3340,18 +3351,18 @@ rb_absint_size(VALUE val, int *nlz_bits_ret)
 {
     BDIGIT *dp;
     BDIGIT *de;
-    BDIGIT fixbuf[bdigit_roomof(sizeof(long))];
+    BDIGIT fixbuf[bdigit_roomof(sizeof(VALUE))];
 
     int num_leading_zeros;
 
     val = rb_to_int(val);
 
-    if (FIXNUM_P(val)) {
-        long v = FIX2LONG(val);
+    if (WFIXNUM_P(val)) {
+        SIGNED_VALUE v = RBIMPL_FIXNUM_VALUE(val);
         if (v < 0) {
             v = -v;
         }
-#if SIZEOF_BDIGIT >= SIZEOF_LONG
+#if SIZEOF_BDIGIT >= SIZEOF_VALUE
         fixbuf[0] = v;
 #else
         {
@@ -3514,7 +3525,7 @@ rb_absint_numwords(VALUE val, size_t word_numbits, size_t *nlz_bits_ret)
  * represent val in two's complement number, without sign bit.
  *
  *   size_t size;
- *   int neg = FIXNUM_P(val) ? FIX2LONG(val) < 0 : BIGNUM_NEGATIVE_P(val);
+ *   int neg = WFIXNUM_P(val) ? FIX2SV(val) < 0 : BIGNUM_NEGATIVE_P(val);
  *   size = rb_absint_numwords(val, 1, NULL)
  *   if (size == (size_t)-1) ...overflow...
  *   if (neg && rb_absint_singlebit_p(val))
@@ -3524,7 +3535,7 @@ rb_absint_numwords(VALUE val, size_t word_numbits, size_t *nlz_bits_ret)
  * represent val in two's complement number, with sign bit.
  *
  *   size_t size;
- *   int neg = FIXNUM_P(val) ? FIX2LONG(val) < 0 : BIGNUM_NEGATIVE_P(val);
+ *   int neg = WFIXNUM_P(val) ? FIX2SV(val) < 0 : BIGNUM_NEGATIVE_P(val);
  *   int nlz_bits;
  *   size = rb_absint_size(val, &nlz_bits);
  *   if (nlz_bits == 0 && !(neg && rb_absint_singlebit_p(val)))
@@ -3535,17 +3546,17 @@ rb_absint_singlebit_p(VALUE val)
 {
     BDIGIT *dp;
     BDIGIT *de;
-    BDIGIT fixbuf[bdigit_roomof(sizeof(long))];
+    BDIGIT fixbuf[bdigit_roomof(sizeof(VALUE))];
     BDIGIT d;
 
     val = rb_to_int(val);
 
-    if (FIXNUM_P(val)) {
-        long v = FIX2LONG(val);
+    if (WFIXNUM_P(val)) {
+        SIGNED_VALUE v = RBIMPL_FIXNUM_VALUE(val);
         if (v < 0) {
             v = -v;
         }
-#if SIZEOF_BDIGIT >= SIZEOF_LONG
+#if SIZEOF_BDIGIT >= SIZEOF_VALUE
         fixbuf[0] = v;
 #else
         {
@@ -3637,12 +3648,12 @@ rb_integer_pack(VALUE val, void *words, size_t numwords, size_t wordsize, size_t
     int sign;
     BDIGIT *ds;
     size_t num_bdigits;
-    BDIGIT fixbuf[bdigit_roomof(sizeof(long))];
+    BDIGIT fixbuf[bdigit_roomof(sizeof(VALUE))];
 
     RB_GC_GUARD(val) = rb_to_int(val);
 
-    if (FIXNUM_P(val)) {
-        long v = FIX2LONG(val);
+    if (WFIXNUM_P(val)) {
+        SIGNED_VALUE v = RBIMPL_FIXNUM_VALUE(val);
         if (v < 0) {
             sign = -1;
             v = -v;
@@ -3650,7 +3661,7 @@ rb_integer_pack(VALUE val, void *words, size_t numwords, size_t wordsize, size_t
         else {
             sign = 1;
         }
-#if SIZEOF_BDIGIT >= SIZEOF_LONG
+#if SIZEOF_BDIGIT >= SIZEOF_VALUE
         fixbuf[0] = v;
 #else
         {
@@ -3770,11 +3781,11 @@ rb_integer_unpack(const void *words, size_t numwords, size_t wordsize, size_t na
         BDIGIT_DBL u = fixbuf[0] + BIGUP(fixbuf[1]);
         if (u == 0)
             return LONG2FIX(0);
-        if (0 < sign && POSFIXABLE(u))
-            return LONG2FIX((long)u);
+        if (0 < sign && RBIMPL_POSFIXABLE(u))
+            return RBIMPL_FIXNUM_FROM_VALUE((SIGNED_VALUE)u);
         if (sign < 0 && BDIGIT_MSB(fixbuf[1]) == 0 &&
-                NEGFIXABLE(-(BDIGIT_DBL_SIGNED)u))
-            return LONG2FIX((long)-(BDIGIT_DBL_SIGNED)u);
+                RBIMPL_NEGFIXABLE(-(BDIGIT_DBL_SIGNED)u))
+            return RBIMPL_FIXNUM_FROM_VALUE((SIGNED_VALUE)-(BDIGIT_DBL_SIGNED)u);
         val = bignew((long)num_bdigits, 0 <= sign);
         MEMCPY(BDIGITS(val), fixbuf, BDIGIT, num_bdigits);
     }
@@ -4266,12 +4277,11 @@ rb_int_parse_cstr(const char *str, ssize_t len, char **endp, size_t *ndigits,
             }
         }
 
-        if (POSFIXABLE(val)) {
-            if (sign) return LONG2FIX(val);
-            else {
-                long result = -(long)val;
-                return LONG2FIX(result);
-            }
+        if (RBIMPL_POSFIXABLE(val)) {
+            /* `val' is unsigned long, which can be narrower than VALUE; the
+             * encoding must happen at VALUE width to avoid wrapping. */
+            if (sign) return RBIMPL_FIXNUM_FROM_VALUE((SIGNED_VALUE)val);
+            else return RBIMPL_FIXNUM_FROM_VALUE(-(SIGNED_VALUE)val);
         }
         else {
             VALUE big = rb_uint2big(val);
@@ -4568,14 +4578,14 @@ rb_ll2big(LONG_LONG n)
 VALUE
 rb_ull2inum(unsigned LONG_LONG n)
 {
-    if (POSFIXABLE(n)) return LONG2FIX((long)n);
+    if (RBIMPL_POSFIXABLE(n)) return RBIMPL_FIXNUM_FROM_VALUE((SIGNED_VALUE)n);
     return rb_ull2big(n);
 }
 
 VALUE
 rb_ll2inum(LONG_LONG n)
 {
-    if (FIXABLE(n)) return LONG2FIX((long)n);
+    if (RBIMPL_FIXABLE(n)) return RBIMPL_FIXNUM_FROM_VALUE((SIGNED_VALUE)n);
     return rb_ll2big(n);
 }
 
@@ -5194,7 +5204,7 @@ rb_big2str1(VALUE x, int base)
     BDIGIT *xds;
     size_t xn;
 
-    if (FIXNUM_P(x)) {
+    if (WFIXNUM_P(x)) {
         return rb_fix2str(x, base);
     }
 
@@ -5476,22 +5486,22 @@ rb_integer_float_cmp(VALUE x, VALUE y)
         else return INT2FIX(1);
     }
     yf = modf(yd, &yi);
-    if (FIXNUM_P(x)) {
-#if SIZEOF_LONG * CHAR_BIT < DBL_MANT_DIG /* assume FLT_RADIX == 2 */
-        double xd = (double)FIX2LONG(x);
+    if (WFIXNUM_P(x)) {
+#if SIZEOF_VALUE * CHAR_BIT < DBL_MANT_DIG /* assume FLT_RADIX == 2 */
+        double xd = (double)RBIMPL_FIXNUM_VALUE(x);
         if (xd < yd)
             return INT2FIX(-1);
         if (xd > yd)
             return INT2FIX(1);
         return INT2FIX(0);
 #else
-        long xn, yn;
-        if (yi < FIXNUM_MIN)
+        SIGNED_VALUE xn, yn;
+        if (yi < RBIMPL_FIXNUM_MIN)
             return INT2FIX(1);
-        if (FIXNUM_MAX+1 <= yi)
+        if (RBIMPL_FIXNUM_MAX+1 <= yi)
             return INT2FIX(-1);
-        xn = FIX2LONG(x);
-        yn = (long)yi;
+        xn = RBIMPL_FIXNUM_VALUE(x);
+        yn = (SIGNED_VALUE)yi;
         if (xn < yn)
             return INT2FIX(-1);
         if (xn > yn)
@@ -5512,15 +5522,6 @@ rb_integer_float_cmp(VALUE x, VALUE y)
     return INT2FIX(-1);
 }
 
-#if SIZEOF_LONG * CHAR_BIT >= DBL_MANT_DIG /* assume FLT_RADIX == 2 */
-COMPILER_WARNING_PUSH
-#if __has_warning("-Wimplicit-int-float-conversion")
-COMPILER_WARNING_IGNORED(-Wimplicit-int-float-conversion)
-#endif
-static const double LONG_MAX_as_double = LONG_MAX;
-COMPILER_WARNING_POP
-#endif
-
 VALUE
 rb_integer_float_eq(VALUE x, VALUE y)
 {
@@ -5532,16 +5533,16 @@ rb_integer_float_eq(VALUE x, VALUE y)
     yf = modf(yd, &yi);
     if (yf != 0)
         return Qfalse;
-    if (FIXNUM_P(x)) {
-#if SIZEOF_LONG * CHAR_BIT < DBL_MANT_DIG /* assume FLT_RADIX == 2 */
-        double xd = (double)FIX2LONG(x);
+    if (WFIXNUM_P(x)) {
+#if SIZEOF_VALUE * CHAR_BIT < DBL_MANT_DIG /* assume FLT_RADIX == 2 */
+        double xd = (double)RBIMPL_FIXNUM_VALUE(x);
         return RBOOL(xd == yd);
 #else
-        long xn, yn;
-        if (yi < LONG_MIN || LONG_MAX_as_double <= yi)
+        SIGNED_VALUE xn, yn;
+        if (yi < RBIMPL_FIXNUM_MIN || (double)(RBIMPL_FIXNUM_MAX + 1) <= yi)
             return Qfalse;
-        xn = FIX2LONG(x);
-        yn = (long)yi;
+        xn = RBIMPL_FIXNUM_VALUE(x);
+        yn = (SIGNED_VALUE)yi;
         return RBOOL(xn == yn);
 #endif
     }
@@ -5553,9 +5554,11 @@ rb_integer_float_eq(VALUE x, VALUE y)
 VALUE
 rb_big_cmp(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(y)) {
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
+    if (WFIXNUM_P(y)) {
         x = bigfixize(x);
-        if (FIXNUM_P(x)) {
+        if (WFIXNUM_P(x)) {
             /* SIGNED_VALUE and Fixnum have same sign-bits, same
              * order */
             SIGNED_VALUE sx = (SIGNED_VALUE)x, sy = (SIGNED_VALUE)y;
@@ -5658,7 +5661,9 @@ rb_big_le(VALUE x, VALUE y)
 VALUE
 rb_big_eq(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(y)) {
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
+    if (WFIXNUM_P(y)) {
         return RBOOL(bignorm(x) == y);
     }
     else if (RB_BIGNUM_TYPE_P(y)) {
@@ -5677,6 +5682,8 @@ rb_big_eq(VALUE x, VALUE y)
 VALUE
 rb_big_eql(VALUE x, VALUE y)
 {
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
     if (!RB_BIGNUM_TYPE_P(y)) return Qfalse;
     if (BIGNUM_SIGN(x) != BIGNUM_SIGN(y)) return Qfalse;
     if (BIGNUM_LEN(x) != BIGNUM_LEN(y)) return Qfalse;
@@ -5686,6 +5693,10 @@ rb_big_eql(VALUE x, VALUE y)
 VALUE
 rb_big_uminus(VALUE x)
 {
+    x = rbimpl_big_normalize_fixnum(x);
+    if (WFIXNUM_P(x)) {
+        return rb_int_uminus(x);
+    }
     VALUE z = rb_big_clone(x);
 
     BIGNUM_NEGATE(z);
@@ -5696,6 +5707,10 @@ rb_big_uminus(VALUE x)
 VALUE
 rb_big_comp(VALUE x)
 {
+    x = rbimpl_big_normalize_fixnum(x);
+    if (WFIXNUM_P(x)) {
+        return rb_int_comp(x);
+    }
     VALUE z = rb_big_clone(x);
     BDIGIT *ds = BDIGITS(z);
     long n = BIGNUM_LEN(z);
@@ -5958,8 +5973,10 @@ rb_big_plus(VALUE x, VALUE y)
 {
     long n;
 
-    if (FIXNUM_P(y)) {
-        n = FIX2LONG(y);
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
+    if (WFIXNUM_P(y)) {
+        n = FIX2SV(y);
         if ((n > 0) != BIGNUM_SIGN(x)) {
             if (n < 0) {
                 n = -n;
@@ -5987,8 +6004,10 @@ rb_big_minus(VALUE x, VALUE y)
 {
     long n;
 
-    if (FIXNUM_P(y)) {
-        n = FIX2LONG(y);
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
+    if (WFIXNUM_P(y)) {
+        n = FIX2SV(y);
         if ((n > 0) != BIGNUM_SIGN(x)) {
             if (n < 0) {
                 n = -n;
@@ -6069,8 +6088,10 @@ bigmul0(VALUE x, VALUE y)
 VALUE
 rb_big_mul(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(y)) {
-        y = rb_int2big(FIX2LONG(y));
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
+    if (WFIXNUM_P(y)) {
+        y = rb_int2big(RBIMPL_FIXNUM_VALUE(y));
     }
     else if (RB_BIGNUM_TYPE_P(y)) {
     }
@@ -6198,8 +6219,10 @@ rb_big_divide(VALUE x, VALUE y, ID op)
 {
     VALUE z;
 
-    if (FIXNUM_P(y)) {
-        y = rb_int2big(FIX2LONG(y));
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
+    if (WFIXNUM_P(y)) {
+        y = rb_int2big(RBIMPL_FIXNUM_VALUE(y));
     }
     else if (RB_BIGNUM_TYPE_P(y)) {
     }
@@ -6241,8 +6264,10 @@ rb_big_modulo(VALUE x, VALUE y)
 {
     VALUE z;
 
-    if (FIXNUM_P(y)) {
-        y = rb_int2big(FIX2LONG(y));
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
+    if (WFIXNUM_P(y)) {
+        y = rb_int2big(RBIMPL_FIXNUM_VALUE(y));
     }
     else if (!RB_BIGNUM_TYPE_P(y)) {
         return rb_num_coerce_bin(x, y, '%');
@@ -6257,8 +6282,10 @@ rb_big_remainder(VALUE x, VALUE y)
 {
     VALUE z;
 
-    if (FIXNUM_P(y)) {
-        y = rb_int2big(FIX2LONG(y));
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
+    if (WFIXNUM_P(y)) {
+        y = rb_int2big(RBIMPL_FIXNUM_VALUE(y));
     }
     else if (!RB_BIGNUM_TYPE_P(y)) {
         return rb_num_coerce_bin(x, y, rb_intern("remainder"));
@@ -6273,8 +6300,10 @@ rb_big_divmod(VALUE x, VALUE y)
 {
     VALUE div, mod;
 
-    if (FIXNUM_P(y)) {
-        y = rb_int2big(FIX2LONG(y));
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
+    if (WFIXNUM_P(y)) {
+        y = rb_int2big(RBIMPL_FIXNUM_VALUE(y));
     }
     else if (!RB_BIGNUM_TYPE_P(y)) {
         return rb_num_coerce_bin(x, y, idDivmod);
@@ -6348,11 +6377,13 @@ rb_big_fdiv_double(VALUE x, VALUE y)
     double dx, dy;
     VALUE v;
 
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
     dx = big2dbl(x);
-    if (FIXNUM_P(y)) {
-        dy = (double)FIX2LONG(y);
+    if (WFIXNUM_P(y)) {
+        dy = (double)RBIMPL_FIXNUM_VALUE(y);
         if (isinf(dx))
-            return big_fdiv_int(x, rb_int2big(FIX2LONG(y)));
+            return big_fdiv_int(x, rb_int2big(RBIMPL_FIXNUM_VALUE(y)));
     }
     else if (RB_BIGNUM_TYPE_P(y)) {
         return big_fdiv_int(x, y);
@@ -6384,6 +6415,8 @@ rb_big_pow(VALUE x, VALUE y)
     SIGNED_VALUE yy;
 
   again:
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
     if (y == INT2FIX(0)) return INT2FIX(1);
     if (y == INT2FIX(1)) return x;
     if (RB_FLOAT_TYPE_P(y)) {
@@ -6394,15 +6427,22 @@ rb_big_pow(VALUE x, VALUE y)
     }
     else if (RB_BIGNUM_TYPE_P(y)) {
         y = bignorm(y);
+        /* bignorm() may return a wide immediate now, and feeding it back
+         * through the normalizer above would ping-pong forever.  Only a
+         * legacy-sized Fixnum is small enough to retry. */
         if (FIXNUM_P(y))
             goto again;
-        rb_raise(rb_eArgError, "exponent is too large");
+        if (!WFIXNUM_P(y))
+            rb_raise(rb_eArgError, "exponent is too large");
+        yy = RBIMPL_FIXNUM_VALUE(y);
+        goto exponent_is_fixnum;
     }
-    else if (FIXNUM_P(y)) {
-        yy = FIX2LONG(y);
+    else if (WFIXNUM_P(y)) {
+        yy = RBIMPL_FIXNUM_VALUE(y);
 
+      exponent_is_fixnum:
         if (yy < 0) {
-            x = rb_big_pow(x, LONG2NUM(-yy));
+            x = rb_big_pow(x, rb_int2inum(-yy));
             if (RB_INTEGER_TYPE_P(x))
                 return rb_rational_raw(INT2FIX(1), x);
             else
@@ -6425,7 +6465,7 @@ rb_big_pow(VALUE x, VALUE y)
                 rb_raise(rb_eArgError, "exponent is too large");
             }
             else {
-                for (mask = FIXNUM_MAX + 1; mask; mask >>= 1) {
+                for (mask = RBIMPL_FIXNUM_MAX + 1; mask; mask >>= 1) {
                     if (z) z = bigsq(z);
                     if (yy & mask) {
                         z = z ? bigtrunc(bigmul0(z, x)) : x;
@@ -6508,13 +6548,15 @@ rb_big_and(VALUE x, VALUE y)
     BDIGIT tmph;
     long tmpn;
 
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
     if (!RB_INTEGER_TYPE_P(y)) {
         return rb_num_coerce_bit(x, y, '&');
     }
 
     hibitsx = abs2twocomp(&x, &xn);
-    if (FIXNUM_P(y)) {
-        return bigand_int(x, xn, hibitsx, FIX2LONG(y));
+    if (WFIXNUM_P(y)) {
+        return bigand_int(x, xn, hibitsx, FIX2SV(y));
     }
     hibitsy = abs2twocomp(&y, &yn);
     if (xn > yn) {
@@ -6627,13 +6669,15 @@ rb_big_or(VALUE x, VALUE y)
     BDIGIT tmph;
     long tmpn;
 
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
     if (!RB_INTEGER_TYPE_P(y)) {
         return rb_num_coerce_bit(x, y, '|');
     }
 
     hibitsx = abs2twocomp(&x, &xn);
-    if (FIXNUM_P(y)) {
-        return bigor_int(x, xn, hibitsx, FIX2LONG(y));
+    if (WFIXNUM_P(y)) {
+        return bigor_int(x, xn, hibitsx, FIX2SV(y));
     }
     hibitsy = abs2twocomp(&y, &yn);
     if (xn > yn) {
@@ -6721,13 +6765,15 @@ rb_big_xor(VALUE x, VALUE y)
     BDIGIT tmph;
     long tmpn;
 
+    x = rbimpl_big_normalize_fixnum(x);
+    y = rbimpl_big_normalize_fixnum(y);
     if (!RB_INTEGER_TYPE_P(y)) {
         return rb_num_coerce_bit(x, y, '^');
     }
 
     hibitsx = abs2twocomp(&x, &xn);
-    if (FIXNUM_P(y)) {
-        return bigxor_int(x, xn, hibitsx, FIX2LONG(y));
+    if (WFIXNUM_P(y)) {
+        return bigxor_int(x, xn, hibitsx, FIX2SV(y));
     }
     hibitsy = abs2twocomp(&y, &yn);
     if (xn > yn) {
@@ -6765,16 +6811,21 @@ rb_big_lshift(VALUE x, VALUE y)
     int shift_numbits;
 
     for (;;) {
-        if (FIXNUM_P(y)) {
-            long l = FIX2LONG(y);
+        y = rbimpl_big_normalize_fixnum(y);
+        if (WFIXNUM_P(y)) {
+            SIGNED_VALUE l = RBIMPL_FIXNUM_VALUE(y);
             unsigned long shift;
-            if (0 <= l) {
+            if (0 <= l && RBIMPL_FIXNUM_ABS_FITS_ULONG(l)) {
                 lshift_p = 1;
-                shift = l;
+                shift = (unsigned long)l;
             }
-            else {
+            else if (l < 0 && RBIMPL_FIXNUM_ABS_FITS_ULONG(l)) {
                 lshift_p = 0;
                 shift = 1+(unsigned long)(-(l+1));
+            }
+            else {
+                y = rb_int2big(l);
+                continue;
             }
             shift_numbits = (int)(shift & (BITSPERDIG-1));
             shift_numdigits = shift >> bit_length(BITSPERDIG-1);
@@ -6795,16 +6846,21 @@ rb_big_rshift(VALUE x, VALUE y)
     int shift_numbits;
 
     for (;;) {
-        if (FIXNUM_P(y)) {
-            long l = FIX2LONG(y);
+        y = rbimpl_big_normalize_fixnum(y);
+        if (WFIXNUM_P(y)) {
+            SIGNED_VALUE l = RBIMPL_FIXNUM_VALUE(y);
             unsigned long shift;
-            if (0 <= l) {
+            if (0 <= l && RBIMPL_FIXNUM_ABS_FITS_ULONG(l)) {
                 lshift_p = 0;
-                shift = l;
+                shift = (unsigned long)l;
             }
-            else {
+            else if (l < 0 && RBIMPL_FIXNUM_ABS_FITS_ULONG(l)) {
                 lshift_p = 1;
                 shift = 1+(unsigned long)(-(l+1));
+            }
+            else {
+                y = rb_int2big(l);
+                continue;
             }
             shift_numbits = (int)(shift & (BITSPERDIG-1));
             shift_numdigits = shift >> bit_length(BITSPERDIG-1);
@@ -6823,7 +6879,7 @@ rb_big_aref(VALUE x, VALUE y)
     BDIGIT *xds;
     size_t shift;
     size_t i, s1, s2;
-    long l;
+    SIGNED_VALUE l;
     BDIGIT bit;
 
     if (RB_BIGNUM_TYPE_P(y)) {
@@ -6838,6 +6894,16 @@ rb_big_aref(VALUE x, VALUE y)
 #else
         shift = big2ull(y, "long long");
 #endif
+    }
+    else if (WFIXNUM_P(y)) {
+        /* A wide immediate is just a large shift count; a real Bignum would
+         * have taken the branch above.  Bits beyond the stored digits are the
+         * sign extension. */
+        l = RBIMPL_FIXNUM_VALUE(y);
+        if (l < 0) return INT2FIX(0);
+        if ((uint64_t)l >= (uint64_t)BIGNUM_LEN(x) * BITSPERDIG)
+            return BIGNUM_SIGN(x) ? INT2FIX(0) : INT2FIX(1);
+        shift = (size_t)l;
     }
     else {
         l = NUM2LONG(y);
@@ -7095,9 +7161,23 @@ rb_big_isqrt(VALUE n)
 #endif
     }
     else {
-        size_t shift = FIX2LONG(rb_big_bit_length(n)) / 4;
+        size_t shift = (size_t)RBIMPL_FIXNUM_VALUE(rb_big_bit_length(n)) / 4;
         VALUE n2 = rb_int_rshift(n, SIZET2NUM(2 * shift));
-        VALUE x = FIXNUM_P(n2) ? LONG2FIX(rb_ulong_isqrt(FIX2ULONG(n2))) : rb_big_isqrt(n2);
+        VALUE x;
+        if (WFIXNUM_P(n2)) {
+            SIGNED_VALUE v = RBIMPL_FIXNUM_VALUE(n2);
+            if ((uint64_t)v <= ULONG_MAX) {
+                x = ULONG2NUM(rb_ulong_isqrt((unsigned long)v));
+            }
+            else {
+                /* A wide immediate exceeds C's `unsigned long'; use the
+                 * Bignum algorithm so no digits are truncated. */
+                x = rb_big_isqrt(rb_int2big(v));
+            }
+        }
+        else {
+            x = rb_big_isqrt(n2);
+        }
         /* x = (x+n/x)/2 */
         x = rb_int_plus(rb_int_lshift(x, SIZET2NUM(shift - 1)), rb_int_idiv(rb_int_rshift(n, SIZET2NUM(shift + 1)), x));
         VALUE xx = rb_int_mul(x, x);
@@ -7139,11 +7219,11 @@ int_pow_tmp3(VALUE x, VALUE y, VALUE m, int nega_flg)
     VALUE z;
     size_t xn, yn, mn, zn;
 
-    if (FIXNUM_P(x)) {
-       x = rb_int2big(FIX2LONG(x));
+    if (WFIXNUM_P(x)) {
+       x = rb_int2big(RBIMPL_FIXNUM_VALUE(x));
     }
-    if (FIXNUM_P(y)) {
-       y = rb_int2big(FIX2LONG(y));
+    if (WFIXNUM_P(y)) {
+       y = rb_int2big(RBIMPL_FIXNUM_VALUE(y));
     }
     RUBY_ASSERT(RB_BIGNUM_TYPE_P(m));
     xn = BIGNUM_LEN(x);
@@ -7161,9 +7241,9 @@ int_pow_tmp3(VALUE x, VALUE y, VALUE m, int nega_flg)
     return rb_big_norm(z);
 #else
     VALUE tmp = LONG2FIX(1L);
-    long yy;
+    SIGNED_VALUE yy;
 
-    for (/*NOP*/; ! FIXNUM_P(y); y = rb_big_rshift(y, LONG2FIX(1L))) {
+    for (/*NOP*/; ! WFIXNUM_P(y); y = rb_big_rshift(y, LONG2FIX(1L))) {
         if (RTEST(rb_int_odd_p(y))) {
             tmp = rb_int_mul(tmp, x);
             tmp = rb_int_modulo(tmp, m);
@@ -7171,7 +7251,7 @@ int_pow_tmp3(VALUE x, VALUE y, VALUE m, int nega_flg)
         x = rb_int_mul(x, x);
         x = rb_int_modulo(x, m);
     }
-    for (yy = FIX2LONG(y); yy; yy >>= 1L) {
+    for (yy = RBIMPL_FIXNUM_VALUE(y); yy; yy >>= 1) {
         if (yy & 1L) {
             tmp = rb_int_mul(tmp, x);
             tmp = rb_int_modulo(tmp, m);
@@ -7194,17 +7274,17 @@ int_pow_tmp3(VALUE x, VALUE y, VALUE m, int nega_flg)
 static VALUE
 int_pow_tmp1(VALUE x, VALUE y, long mm, int nega_flg)
 {
-    long xx = FIX2LONG(x);
+    long xx = (long)RBIMPL_FIXNUM_VALUE(x);
     long tmp = 1L;
-    long yy;
+    SIGNED_VALUE yy;
 
-    for (/*NOP*/; ! FIXNUM_P(y); y = rb_big_rshift(y, LONG2FIX(1L))) {
+    for (/*NOP*/; ! WFIXNUM_P(y); y = rb_big_rshift(y, LONG2FIX(1L))) {
         if (RTEST(rb_int_odd_p(y))) {
             tmp = (tmp * xx) % mm;
         }
         xx = (xx * xx) % mm;
     }
-    for (yy = FIX2LONG(y); yy; yy >>= 1L) {
+    for (yy = RBIMPL_FIXNUM_VALUE(y); yy; yy >>= 1) {
         if (yy & 1L) {
             tmp = (tmp * xx) % mm;
         }
@@ -7221,11 +7301,11 @@ static VALUE
 int_pow_tmp2(VALUE x, VALUE y, long mm, int nega_flg)
 {
     long tmp = 1L;
-    long yy;
+    SIGNED_VALUE yy;
 #ifdef DLONG
     const DLONG m = mm;
     long tmp2 = tmp;
-    long xx = FIX2LONG(x);
+    long xx = (long)RBIMPL_FIXNUM_VALUE(x);
 # define MUL_MODULO(a, b, c) (long)(((DLONG)(a) * (DLONG)(b)) % (c))
 #else
     const VALUE m = LONG2FIX(mm);
@@ -7234,13 +7314,13 @@ int_pow_tmp2(VALUE x, VALUE y, long mm, int nega_flg)
 # define MUL_MODULO(a, b, c) rb_int_modulo(rb_fix_mul_fix((a), (b)), (c))
 #endif
 
-    for (/*NOP*/; ! FIXNUM_P(y); y = rb_big_rshift(y, LONG2FIX(1L))) {
+    for (/*NOP*/; ! WFIXNUM_P(y); y = rb_big_rshift(y, LONG2FIX(1L))) {
         if (RTEST(rb_int_odd_p(y))) {
             tmp2 = MUL_MODULO(tmp2, xx, m);
         }
         xx = MUL_MODULO(xx, xx, m);
     }
-    for (yy = FIX2LONG(y); yy; yy >>= 1L) {
+    for (yy = RBIMPL_FIXNUM_VALUE(y); yy; yy >>= 1) {
         if (yy & 1L) {
             tmp2 = MUL_MODULO(tmp2, xx, m);
         }
@@ -7250,7 +7330,7 @@ int_pow_tmp2(VALUE x, VALUE y, long mm, int nega_flg)
 #ifdef DLONG
     tmp = tmp2;
 #else
-    tmp = FIX2LONG(tmp2);
+    tmp = (long)RBIMPL_FIXNUM_VALUE(tmp2);
 #endif
     if (nega_flg && tmp) {
         tmp -= mm;
@@ -7300,6 +7380,10 @@ rb_int_powm(int const argc, VALUE * const argv, VALUE const num)
         if (rb_int_negative_p(m)) {
             m = rb_int_uminus(m);
             nega_flg = 1;
+        }
+
+        if (WFIXNUM_P(m) && !FIXNUM_P(m)) {
+            m = rb_int2big(RBIMPL_FIXNUM_VALUE(m));
         }
 
         if (FIXNUM_P(m)) {

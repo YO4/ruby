@@ -735,8 +735,11 @@ mod manual_defs {
     pub const RUBY_LONG_MIN: isize = std::os::raw::c_long::MIN as isize;
     pub const RUBY_LONG_MAX: isize = std::os::raw::c_long::MAX as isize;
 
-    pub const RUBY_FIXNUM_MIN: isize = RUBY_LONG_MIN / 2;
-    pub const RUBY_FIXNUM_MAX: isize = RUBY_LONG_MAX / 2;
+    // YJIT is core (internal.h) and always observes the wide VALUE-sized
+    // Fixnum range.  Use RBIMPL_FIXNUM_MAX/MIN (VALUE width), not the
+    // legacy long-sized RUBY_FIXNUM_MAX.
+    pub const RUBY_FIXNUM_MIN: isize = isize::MIN >> 1;
+    pub const RUBY_FIXNUM_MAX: isize = isize::MAX >> 1;
 
     // From vm_callinfo.h - uses calculation that seems to confuse bindgen
     pub const VM_CALL_ARGS_SIMPLE: u32 = 1 << VM_CALL_ARGS_SIMPLE_bit;

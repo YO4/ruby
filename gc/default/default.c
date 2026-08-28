@@ -1434,7 +1434,7 @@ total_final_slots_count(rb_objspace_t *objspace)
 #if SIZEOF_LONG == SIZEOF_VOIDP
 # define obj_id_to_ref(objid) ((objid) ^ FIXNUM_FLAG) /* unset FIXNUM_FLAG */
 #elif SIZEOF_LONG_LONG == SIZEOF_VOIDP
-# define obj_id_to_ref(objid) (FIXNUM_P(objid) ? \
+# define obj_id_to_ref(objid) (WFIXNUM_P(objid) ? \
    ((objid) ^ FIXNUM_FLAG) : (NUM2PTR(objid) << 1))
 #else
 # error not supported
@@ -1700,7 +1700,7 @@ check_rvalue_consistency_force(rb_objspace_t *objspace, const VALUE obj, int ter
     unsigned int lev = 0;
     if (take_vm_lock) lev = RB_GC_VM_LOCK_NO_BARRIER();
     {
-        if (SPECIAL_CONST_P(obj)) {
+        if (WSPECIAL_CONST_P(obj)) {
             fprintf(stderr, "check_rvalue_consistency: %p is a special const.\n", (void *)obj);
             err++;
         }
@@ -1840,7 +1840,7 @@ gc_object_moved_p(rb_objspace_t *objspace, VALUE obj)
 static inline int
 RVALUE_OLD_P(rb_objspace_t *objspace, VALUE obj)
 {
-    GC_ASSERT(!RB_SPECIAL_CONST_P(obj));
+    GC_ASSERT(!WSPECIAL_CONST_P(obj));
     check_rvalue_consistency(objspace, obj);
     // Because this will only ever be called on GC controlled objects,
     // we can use the faster _RAW function here
@@ -2376,17 +2376,17 @@ gc_aligned_malloc(size_t alignment, size_t size)
 /* The page pool (global_objspace->page_pool): heap page bodies are carved out of large
  * arenas and reused through the pool.  Free bodies are split into a small global hot
  * list (≤ PAGE_POOL_HOT_MAX, never madvise'd) and per-arena cold freelists (eligible for
- * OS release — see page_pool_reclaim). Both lists use an in-body link at offset 0. */
+ * OS release  Esee page_pool_reclaim). Both lists use an in-body link at offset 0. */
 
 #define PAGE_POOL_ARENA_SIZE (HEAP_PAGE_SIZE * 32) /* 2MiB with 64KiB pages */
 #define PAGE_POOL_ARENA_BODIES (PAGE_POOL_ARENA_SIZE / HEAP_PAGE_SIZE) /* 32 */
-#define PAGE_POOL_HOT_MAX 0 /* disabled — empty_pages is the retention buffer */
+#define PAGE_POOL_HOT_MAX 0 /* disabled  Eempty_pages is the retention buffer */
 #define PAGE_POOL_ARENA_KEEP_HALF (PAGE_POOL_ARENA_BODIES / 2) /* 16 */
 
 /* Steal bit 0 of the in-body link word: set iff the body has been madvise'd (cold). */
 #define PAGE_POOL_ADVISED_BIT ((uintptr_t)1)
 
-/* While a body is free, the arena back-pointer is stored at offset sizeof(header) — one
+/* While a body is free, the arena back-pointer is stored at offset sizeof(header)  Eone
  * word past the link, inside the spared first OS page.  PAGE_POOL_SCRATCH_SIZE covers
  * both the link (offset 0) and the tag for ASAN unpoison. */
 #define PAGE_POOL_BODY_ARENA(body) \
@@ -2584,7 +2584,7 @@ page_pool_reclaim(rb_global_objspace_t *g)
      * advised_count must not be adjusted anywhere either. */
     const bool can_advise = os_page_size < HEAP_PAGE_SIZE;
 
-    /* Step A — advise cold bodies (immediate release: drop RSS now if the platform allows). */
+    /* Step A  Eadvise cold bodies (immediate release: drop RSS now if the platform allows). */
     if (can_advise) {
         for (struct page_arena *a = g->page_pool.arenas; a; a = a->next) {
             for (struct heap_page_body *body = a->cold_freelist; body; ) {
@@ -2604,7 +2604,7 @@ page_pool_reclaim(rb_global_objspace_t *g)
         }
     }
 
-    /* Step B — munmap fully-free arenas (with retention buffer).
+    /* Step B  Emunmap fully-free arenas (with retention buffer).
      *
      * total_free = Σ free_count; free_count already includes hot-list bodies
      * (page_pool_release increments it unconditionally), so no separate hot_count.
@@ -3027,7 +3027,7 @@ newobj_init(VALUE klass, VALUE flags, int wb_protected, rb_objspace_t *objspace,
 
 #if GC_DEBUG
     GET_RVALUE_OVERHEAD(obj)->file = rb_gc_impl_source_location_cstr(&GET_RVALUE_OVERHEAD(obj)->line);
-    GC_ASSERT(!SPECIAL_CONST_P(obj)); /* check alignment */
+    GC_ASSERT(!WSPECIAL_CONST_P(obj)); /* check alignment */
 #endif
 
     gc_report(5, objspace, "newobj: %s\n", rb_obj_info(obj));
@@ -5784,7 +5784,7 @@ gc_mark(rb_objspace_t *objspace, VALUE obj)
 static inline void
 gc_pin(rb_objspace_t *objspace, VALUE obj)
 {
-    GC_ASSERT(!SPECIAL_CONST_P(obj));
+    GC_ASSERT(!WSPECIAL_CONST_P(obj));
 
     /* Never write a foreign page's pinned bit (a global GC may: everyone is stopped). */
     if (gc_skip_foreign_object_p(objspace, obj)) return;
@@ -6470,7 +6470,7 @@ root_scope_check_i(const char *category, VALUE obj, void *ptr)
 {
     struct verify_internal_consistency_struct *data = ptr;
 
-    if (RB_SPECIAL_CONST_P(obj)) return;
+    if (WSPECIAL_CONST_P(obj)) return;
     /* This check walks every objspace (verify_pointer_in_any_heap_p), so it is sound
      * only with the world stopped; a mid-local-GC verify races with other Ractors'
      * lock-free allocation. */
@@ -7774,11 +7774,11 @@ rb_gc_impl_writebarrier(void *objspace_ptr, VALUE a, VALUE b)
     rb_objspace_t *objspace = objspace_ptr;
 
 #if RGENGC_CHECK_MODE
-    if (SPECIAL_CONST_P(a)) rb_bug("rb_gc_writebarrier: a is special const: %"PRIxVALUE, a);
-    if (SPECIAL_CONST_P(b)) rb_bug("rb_gc_writebarrier: b is special const: %"PRIxVALUE, b);
+    if (WSPECIAL_CONST_P(a)) rb_bug("rb_gc_writebarrier: a is special const: %"PRIxVALUE, a);
+    if (WSPECIAL_CONST_P(b)) rb_bug("rb_gc_writebarrier: b is special const: %"PRIxVALUE, b);
 #else
-    RBIMPL_ASSERT_OR_ASSUME(!SPECIAL_CONST_P(a));
-    RBIMPL_ASSERT_OR_ASSUME(!SPECIAL_CONST_P(b));
+    RBIMPL_ASSERT_OR_ASSUME(!WSPECIAL_CONST_P(a));
+    RBIMPL_ASSERT_OR_ASSUME(!WSPECIAL_CONST_P(b));
 #endif
 
     GC_ASSERT(!during_gc);
@@ -8271,7 +8271,7 @@ gc_start_body(rb_objspace_t *objspace, unsigned int reason, bool allow_global)
     objspace->flags.immediate_sweep = !!(reason & GPR_FLAG_IMMEDIATE_SWEEP);
 
     if (ruby_gc_stressful) {
-        int flag = FIXNUM_P(ruby_gc_stress_mode) ? FIX2INT(ruby_gc_stress_mode) : 0;
+        int flag = WFIXNUM_P(ruby_gc_stress_mode) ? (int)FIX2SV(ruby_gc_stress_mode) : 0;
 
         if ((flag & (1 << gc_stress_no_major)) == 0) {
             do_full_mark = TRUE;
@@ -8931,7 +8931,7 @@ static int
 genfields_mark_i(VALUE key, VALUE val, void *arg)
 {
     struct genfields_mark_arg *a = (struct genfields_mark_arg *)arg;
-    if (RB_SPECIAL_CONST_P(val) || !RVALUE_MARKED_BITMAP(key)) {
+    if (WSPECIAL_CONST_P(val) || !RVALUE_MARKED_BITMAP(key)) {
         return ST_CONTINUE;
     }
     /* Record the old(key)->young(val) edge with the host (key) as parent, even when val
@@ -9579,7 +9579,7 @@ rb_gc_impl_prepare_heap(void *objspace_ptr)
 static int
 gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
 {
-    GC_ASSERT(!SPECIAL_CONST_P(obj));
+    GC_ASSERT(!WSPECIAL_CONST_P(obj));
 
     switch (BUILTIN_TYPE(obj)) {
       case T_NONE:
@@ -10499,7 +10499,7 @@ rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym)
             stat_one_heap(objspace, &heaps[i], hash, Qnil);
         }
     }
-    else if (FIXNUM_P(heap_name)) {
+    else if (WFIXNUM_P(heap_name)) {
         int heap_idx = FIX2INT(heap_name);
 
         if (heap_idx < 0 || heap_idx >= HEAP_COUNT) {
@@ -10787,7 +10787,7 @@ atomic_sub_nounderflow(size_t *var, size_t sub)
 }
 
 #define gc_stress_full_mark_after_malloc_p() \
-    (FIXNUM_P(ruby_gc_stress_mode) && (FIX2LONG(ruby_gc_stress_mode) & (1<<gc_stress_full_mark_after_malloc)))
+    (WFIXNUM_P(ruby_gc_stress_mode) && (FIX2SV(ruby_gc_stress_mode) & (1<<gc_stress_full_mark_after_malloc)))
 
 static void
 objspace_malloc_gc_stress(rb_objspace_t *objspace)

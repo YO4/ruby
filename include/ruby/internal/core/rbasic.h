@@ -165,7 +165,7 @@ RBIMPL_ATTR_ARTIFICIAL()
 static inline VALUE
 RBASIC_CLASS(VALUE obj)
 {
-    RBIMPL_ASSERT_OR_ASSUME(! RB_SPECIAL_CONST_P(obj));
+    RBIMPL_ASSERT_OR_ASSUME(! rbimm_special_const_p(obj));
     return RBASIC(obj)->klass;
 }
 

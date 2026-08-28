@@ -1210,7 +1210,7 @@ rb_struct_pos(VALUE s, VALUE *name, bool name_only)
 static void
 invalid_struct_pos(VALUE s, VALUE idx)
 {
-    if (FIXNUM_P(idx)) {
+    if (WFIXNUM_P(idx)) {
         long i = FIX2INT(idx), len = RSTRUCT_LEN_RAW(s);
         if (i < 0) {
             rb_raise(rb_eIndexError, "offset %ld too small for struct(size:%ld)",

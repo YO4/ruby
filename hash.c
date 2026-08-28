@@ -175,7 +175,7 @@ rb_dbl_long_hash(double d)
 #endif
 }
 
-static inline long
+static inline SIGNED_VALUE
 any_hash(VALUE a, st_index_t (*other_func)(VALUE))
 {
     VALUE hval;
@@ -202,7 +202,7 @@ any_hash(VALUE a, st_index_t (*other_func)(VALUE))
         break;
       case T_BIGNUM:
         hval = rb_big_hash(a);
-        hnum = FIX2LONG(hval);
+        hnum = FIX2SV(hval);
         break;
       case T_FLOAT: /* prevent pathological behavior: [Bug #10761] */
         hnum = rb_dbl_long_hash(rb_float_value(a));
@@ -210,11 +210,14 @@ any_hash(VALUE a, st_index_t (*other_func)(VALUE))
       default:
         hnum = other_func(a);
     }
+    /* Kernel#hash results are part of the old C API surface: keep them inside
+     * the long-sized Fixnum range so that extensions (and internal consumers
+     * such as Array#hash) can safely apply NUM2LONG/FIX2LONG to them. */
     if ((SIGNED_VALUE)hnum > 0)
-        hnum &= FIXNUM_MAX;
+        hnum &= RBIMPL_LEGACY_FIXNUM_MAX;
     else
-        hnum |= FIXNUM_MIN;
-    return (long)hnum;
+        hnum |= RBIMPL_LEGACY_FIXNUM_MIN;
+    return (SIGNED_VALUE)hnum;
 }
 
 VALUE rb_obj_hash(VALUE obj);
@@ -242,35 +245,36 @@ obj_any_hash(VALUE obj)
         hval = rb_exec_recursive_outer_mid(hash_recursive, obj, 0, id_hash);
     }
 
-    while (!FIXNUM_P(hval)) {
+    while (!WFIXNUM_P(hval)) {
         if (RB_TYPE_P(hval, T_BIGNUM)) {
             int sign;
-            unsigned long ul;
+            uintptr_t ul;
             sign = rb_integer_pack(hval, &ul, 1, sizeof(ul), 0,
                     INTEGER_PACK_NATIVE_BYTE_ORDER);
             if (sign < 0) {
-                hval = LONG2FIX(ul | FIXNUM_MIN);
+                hval = RBIMPL_FIXNUM_FROM_VALUE((SIGNED_VALUE)(ul | (uintptr_t)RBIMPL_FIXNUM_MIN));
             }
             else {
-                hval = LONG2FIX(ul & FIXNUM_MAX);
+                hval = RBIMPL_FIXNUM_FROM_VALUE((SIGNED_VALUE)(ul & (uintptr_t)RBIMPL_FIXNUM_MAX));
             }
         }
         hval = rb_to_int(hval);
     }
 
-    return FIX2LONG(hval);
+    return FIX2SV(hval);
 }
 
 st_index_t
 rb_any_hash(VALUE a)
 {
-    return any_hash(a, obj_any_hash);
+    return (st_index_t)any_hash(a, obj_any_hash);
 }
 
 VALUE
 rb_hash(VALUE obj)
 {
-    return LONG2FIX(any_hash(obj, obj_any_hash));
+    /* any_hash() already clamps to the legacy Fixnum range. */
+    return RB_INT2FIX((long)any_hash(obj, obj_any_hash));
 }
 
 
@@ -319,7 +323,7 @@ static st_index_t
 objid_hash(VALUE obj)
 {
     VALUE object_id = rb_obj_id(obj);
-    if (!FIXNUM_P(object_id))
+    if (!WFIXNUM_P(object_id))
         object_id = rb_big_hash(object_id);
 
 #if SIZEOF_LONG == SIZEOF_VOIDP
@@ -362,7 +366,7 @@ objid_hash(VALUE obj)
 VALUE
 rb_obj_hash(VALUE obj)
 {
-    long hnum = any_hash(obj, objid_hash);
+    SIGNED_VALUE hnum = any_hash(obj, objid_hash);
     return ST2FIX(hnum);
 }
 
@@ -1330,8 +1334,8 @@ static unsigned long
 iter_lev_in_ivar(VALUE hash)
 {
     VALUE levval = rb_ivar_get(hash, id_hash_iter_lev);
-    HASH_ASSERT(FIXNUM_P(levval));
-    long lev = FIX2LONG(levval);
+    HASH_ASSERT(WFIXNUM_P(levval));
+    long lev = FIX2SV(levval);
     HASH_ASSERT(lev >= 0);
     return (unsigned long)lev;
 }

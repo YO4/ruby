@@ -83,7 +83,7 @@ f_add(VALUE x, VALUE y)
 inline static VALUE
 f_div(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(y) && FIX2LONG(y) == 1)
+    if (WFIXNUM_P(y) && FIX2SV(y) == 1)
         return x;
     return rb_funcall(x, '/', 1, y);
 }
@@ -92,7 +92,7 @@ inline static int
 f_gt_p(VALUE x, VALUE y)
 {
     if (RB_INTEGER_TYPE_P(x)) {
-        if (FIXNUM_P(x) && FIXNUM_P(y))
+        if (WFIXNUM_P(x) && WFIXNUM_P(y))
             return (SIGNED_VALUE)x > (SIGNED_VALUE)y;
         return RTEST(rb_int_gt(x, y));
     }
@@ -264,7 +264,7 @@ f_to_f(VALUE x)
 inline static int
 f_eqeq_p(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(x) && FIXNUM_P(y))
+    if (WFIXNUM_P(x) && WFIXNUM_P(y))
         return x == y;
     else if (RB_FLOAT_TYPE_P(x) || RB_FLOAT_TYPE_P(y))
         return NUM2DBL(x) == NUM2DBL(y);
@@ -314,7 +314,7 @@ f_negative_p(VALUE x)
 static inline bool
 always_finite_type_p(VALUE x)
 {
-    if (FIXNUM_P(x)) return true;
+    if (WFIXNUM_P(x)) return true;
     if (FLONUM_P(x)) return true; /* Infinity can't be a flonum */
     return (RB_INTEGER_TYPE_P(x) || RB_TYPE_P(x, T_RATIONAL));
 }
@@ -1143,8 +1143,8 @@ rb_complex_pow(VALUE self, VALUE other)
                        f_mul(dat->imag, m_log_bang(r)));
         return f_complex_polar(CLASS_OF(self), nr, ntheta);
     }
-    if (FIXNUM_P(other)) {
-        long n = FIX2LONG(other);
+    if (WFIXNUM_P(other)) {
+        long n = FIX2SV(other);
         if (n == 0) {
             return nucomp_s_new_internal(CLASS_OF(self), ONE, ZERO);
         }

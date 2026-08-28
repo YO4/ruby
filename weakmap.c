@@ -177,7 +177,7 @@ wmap_allocate(VALUE klass)
 static VALUE
 wmap_inspect_append(VALUE str, VALUE obj)
 {
-    if (SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
         return rb_str_append(str, rb_inspect(obj));
     }
     else {

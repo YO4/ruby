@@ -59,7 +59,7 @@ extern ID ruby_static_id_cause;
 #include "eval_jump.c"
 
 #define CLASS_OR_MODULE_P(obj) \
-    (!SPECIAL_CONST_P(obj) && \
+    (!WSPECIAL_CONST_P(obj) && \
      (BUILTIN_TYPE(obj) == T_CLASS || BUILTIN_TYPE(obj) == T_MODULE))
 
 int
@@ -314,7 +314,7 @@ ruby_executable_node(void *n, int *status)
       case Qtrue:  s = EXIT_SUCCESS; break;
       case Qfalse: s = EXIT_FAILURE; break;
       default:
-        if (!FIXNUM_P(v)) return TRUE;
+        if (!WFIXNUM_P(v)) return TRUE;
         s = FIX2INT(v);
     }
     if (status) *status = s;
@@ -439,7 +439,7 @@ rb_mod_s_constants(int argc, VALUE *argv, VALUE mod)
 void
 rb_class_modify_check(VALUE klass)
 {
-    if (SPECIAL_CONST_P(klass)) {
+    if (WSPECIAL_CONST_P(klass)) {
         Check_Type(klass, T_CLASS);
     }
     if (RB_TYPE_P(klass, T_MODULE)) {
@@ -2049,7 +2049,7 @@ errinfo_place(const rb_execution_context_t *ec)
             }
             else if (ISEQ_BODY(CFP_ISEQ(cfp))->type == ISEQ_TYPE_ENSURE &&
                      !THROW_DATA_P(cfp->ep[VM_ENV_INDEX_LAST_LVAR]) &&
-                     !FIXNUM_P(cfp->ep[VM_ENV_INDEX_LAST_LVAR])) {
+                     !WFIXNUM_P(cfp->ep[VM_ENV_INDEX_LAST_LVAR])) {
                 return &cfp->ep[VM_ENV_INDEX_LAST_LVAR];
             }
         }

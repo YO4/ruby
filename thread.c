@@ -614,7 +614,7 @@ thread_do_start_proc(rb_thread_t *th)
         VALUE self = rb_ractor_self(th->ractor);
         th->thgroup = th->ractor->thgroup_default = rb_obj_alloc(cThGroup);
 
-        VM_ASSERT(FIXNUM_P(args));
+        VM_ASSERT(WFIXNUM_P(args));
         args_len = FIX2INT(args);
         args_ptr = ALLOCA_N(VALUE, args_len);
         rb_ractor_receive_parameters(th->ec, th->ractor, args_len, (VALUE *)args_ptr);
@@ -1324,7 +1324,7 @@ thread_join(rb_thread_t *target_th, VALUE timeout, rb_hrtime_t *limit)
     if (target_th->ec->errinfo != Qnil) {
         VALUE err = target_th->ec->errinfo;
 
-        if (FIXNUM_P(err)) {
+        if (WFIXNUM_P(err)) {
             switch (err) {
               case INT2FIX(TAG_FATAL):
                 RUBY_DEBUG_LOG("terminated target_th:%u status:%s", rb_th_serial(target_th), thread_status_name(target_th, TRUE));
@@ -1407,7 +1407,7 @@ thread_join_m(int argc, VALUE *argv, VALUE self)
     if (NIL_P(timeout)) {
         /* unlimited */
     }
-    else if (FIXNUM_P(timeout)) {
+    else if (WFIXNUM_P(timeout)) {
         rel = rb_sec2hrtime(NUM2TIMET(timeout));
         limit = &rel;
     }
@@ -3831,7 +3831,7 @@ rb_thread_status(VALUE thread)
 
     if (rb_threadptr_dead(target_th)) {
         if (!NIL_P(target_th->ec->errinfo) &&
-            !FIXNUM_P(target_th->ec->errinfo)) {
+            !WFIXNUM_P(target_th->ec->errinfo)) {
             return Qnil;
         }
         else {
@@ -6180,8 +6180,8 @@ update_line_coverage(VALUE data, const rb_trace_arg_t *trace_arg)
                 return;
             }
             num = RARRAY_AREF(lines, line);
-            if (!FIXNUM_P(num)) return;
-            count = FIX2LONG(num) + 1;
+            if (!WFIXNUM_P(num)) return;
+            count = FIX2SV(num) + 1;
             if (POSFIXABLE(count)) {
                 RARRAY_ASET(lines, line, LONG2FIX(count));
             }
@@ -6201,7 +6201,7 @@ update_branch_coverage(VALUE data, const rb_trace_arg_t *trace_arg)
             long idx = FIX2INT(RARRAY_AREF(ISEQ_PC2BRANCHINDEX(CFP_ISEQ(cfp)), pc)), count;
             VALUE counters = RARRAY_AREF(branches, 1);
             VALUE num = RARRAY_AREF(counters, idx);
-            count = FIX2LONG(num) + 1;
+            count = FIX2SV(num) + 1;
             if (POSFIXABLE(count)) {
                 RARRAY_ASET(counters, idx, LONG2FIX(count));
             }
@@ -6282,7 +6282,7 @@ method_coverage_call(const rb_method_entry_t *me, VALUE count,
     const rb_method_entry_t *resolved_me = rb_resolve_me_location(me, location);
 
     if (me != resolved_me || RB_TYPE_P(me->owner, T_ICLASS) ||
-        FIX2LONG(location[1]) <= 0) return;
+        FIX2SV(location[1]) <= 0) return;
 
     struct rb_coverage_method_data method = {
         .owner = me->owner,
@@ -6308,7 +6308,7 @@ method_coverage_me_i(VALUE me, VALUE value, VALUE data)
 static int
 method_coverage_count_i(VALUE me, VALUE count, VALUE data)
 {
-    if (!FIXNUM_P(count)) count = INT2FIX(0);
+    if (!WFIXNUM_P(count)) count = INT2FIX(0);
     method_coverage_call((const rb_method_entry_t *)me, count,
                          (struct method_coverage_arg *)data);
     return ST_CONTINUE;
@@ -6342,7 +6342,7 @@ update_method_coverage(VALUE cme2counter, rb_trace_arg_t *trace_arg)
     if (!me) return;
 
     rcount = rb_hash_aref(cme2counter, (VALUE) me);
-    count = FIXNUM_P(rcount) ? FIX2LONG(rcount) + 1 : 1;
+    count = WFIXNUM_P(rcount) ? FIX2SV(rcount) + 1 : 1;
     if (POSFIXABLE(count)) {
         rb_hash_aset(cme2counter, (VALUE) me, LONG2FIX(count));
     }

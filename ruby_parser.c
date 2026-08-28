@@ -892,10 +892,10 @@ rb_str_new_mutable_parser_string(rb_parser_string_t *str)
 static VALUE
 negative_numeric(VALUE val)
 {
-    if (FIXNUM_P(val)) {
-        return LONG2FIX(-FIX2LONG(val));
+    if (WFIXNUM_P(val)) {
+        return LONG2FIX(-FIX2SV(val));
     }
-    if (SPECIAL_CONST_P(val)) {
+    if (WSPECIAL_CONST_P(val)) {
 #if USE_FLONUM
         if (FLONUM_P(val)) {
             return DBL2NUM(-RFLOAT_VALUE(val));

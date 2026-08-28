@@ -2017,7 +2017,7 @@ callable_method_entry_or_negative(VALUE klass, ID mid, VALUE *defined_class_ptr)
 {
     const rb_callable_method_entry_t *cme;
 
-    VM_ASSERT(!SPECIAL_CONST_P(klass));
+    VM_ASSERT(!WSPECIAL_CONST_P(klass));
 
     if (RB_BUILTIN_TYPE(klass) == T_NONE) {
       // If we find a T_NONE here, it's most likely we called CLASS_OF(obj) on a

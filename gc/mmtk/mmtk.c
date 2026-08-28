@@ -486,7 +486,7 @@ rb_mmtk_special_const_p(MMTk_ObjectReference object)
 {
     VALUE obj = (VALUE)object;
 
-    return RB_SPECIAL_CONST_P(obj);
+    return WSPECIAL_CONST_P(obj);
 }
 
 RBIMPL_ATTR_FORMAT(RBIMPL_PRINTF_FORMAT, 1, 2)
@@ -1156,7 +1156,7 @@ rb_mmtk_call_object_closure(VALUE obj, bool pin)
 void
 rb_gc_impl_mark(void *objspace_ptr, VALUE obj)
 {
-    if (RB_SPECIAL_CONST_P(obj)) return;
+    if (WSPECIAL_CONST_P(obj)) return;
 
     rb_mmtk_call_object_closure(obj, false);
 }
@@ -1164,7 +1164,7 @@ rb_gc_impl_mark(void *objspace_ptr, VALUE obj)
 void
 rb_gc_impl_mark_and_move(void *objspace_ptr, VALUE *ptr)
 {
-    if (RB_SPECIAL_CONST_P(*ptr)) return;
+    if (WSPECIAL_CONST_P(*ptr)) return;
 
     VALUE new_obj = rb_mmtk_call_object_closure(*ptr, false);
     if (new_obj != *ptr) {
@@ -1175,7 +1175,7 @@ rb_gc_impl_mark_and_move(void *objspace_ptr, VALUE *ptr)
 void
 rb_gc_impl_mark_and_pin(void *objspace_ptr, VALUE obj)
 {
-    if (RB_SPECIAL_CONST_P(obj)) return;
+    if (WSPECIAL_CONST_P(obj)) return;
 
     rb_mmtk_call_object_closure(obj, true);
 }
@@ -1233,7 +1233,7 @@ rb_gc_impl_writebarrier(void *objspace_ptr, VALUE a, VALUE b)
 {
     struct MMTk_ractor_cache *cache = rb_gc_get_ractor_newobj_cache();
 
-    if (SPECIAL_CONST_P(b)) return;
+    if (WSPECIAL_CONST_P(b)) return;
 
 #ifdef MMTK_DEBUG
     if (!rb_gc_impl_live_object_p(objspace_ptr, (void *)a)) {

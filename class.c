@@ -2843,7 +2843,7 @@ rb_singleton_class_get(VALUE obj)
 {
     VALUE klass;
 
-    if (SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
         return rb_special_singleton_class(obj);
     }
     klass = METACLASS_OF(obj);

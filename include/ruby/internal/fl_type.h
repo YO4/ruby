@@ -380,7 +380,7 @@ RBIMPL_ATTR_FORCEINLINE()
 static bool
 RB_FL_ABLE(VALUE obj)
 {
-    if (RB_SPECIAL_CONST_P(obj)) {
+    if (rbimm_special_const_p(obj)) {
         return false;
     }
     else {

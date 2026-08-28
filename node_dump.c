@@ -110,7 +110,7 @@
 VALUE
 rb_dump_literal(VALUE lit)
 {
-    if (!RB_SPECIAL_CONST_P(lit)) {
+    if (!WSPECIAL_CONST_P(lit)) {
         VALUE str;
         switch (RB_BUILTIN_TYPE(lit)) {
           case T_CLASS: case T_MODULE: case T_ICLASS:

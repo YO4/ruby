@@ -15,8 +15,8 @@
 #define CMP_OPTIMIZABLE(type) BASIC_OP_UNREDEFINED_P(BOP_CMP, type##_REDEFINED_OP_FLAG)
 
 #define OPTIMIZED_CMP(a, b) \
-    ((FIXNUM_P(a) && FIXNUM_P(b) && CMP_OPTIMIZABLE(INTEGER)) ? \
-     (((long)a > (long)b) ? 1 : ((long)a < (long)b) ? -1 : 0) : \
+    ((WFIXNUM_P(a) && WFIXNUM_P(b) && CMP_OPTIMIZABLE(INTEGER)) ? \
+     (((SIGNED_VALUE)a > (SIGNED_VALUE)b) ? 1 : ((SIGNED_VALUE)a < (SIGNED_VALUE)b) ? -1 : 0) : \
      (STRING_P(a) && STRING_P(b) && CMP_OPTIMIZABLE(STRING)) ? \
      rb_str_cmp(a, b) : \
      (RB_FLOAT_TYPE_P(a) && RB_FLOAT_TYPE_P(b) && CMP_OPTIMIZABLE(FLOAT)) ? \

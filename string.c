@@ -4123,8 +4123,8 @@ rb_str_concat(VALUE str1, VALUE str2)
     if (RB_INTEGER_TYPE_P(str2)) {
         if (rb_num_to_uint(str2, &code) == 0) {
         }
-        else if (FIXNUM_P(str2)) {
-            rb_raise(rb_eRangeError, "%ld out of char range", FIX2LONG(str2));
+        else if (WFIXNUM_P(str2)) {
+            rb_raise(rb_eRangeError, "%ld out of char range", FIX2SV(str2));
         }
         else {
             rb_raise(rb_eRangeError, "bignum out of char range");
@@ -5761,8 +5761,8 @@ rb_str_aref(VALUE str, VALUE indx)
 {
     long idx;
 
-    if (FIXNUM_P(indx)) {
-        idx = FIX2LONG(indx);
+    if (WFIXNUM_P(indx)) {
+        idx = FIX2SV(indx);
     }
     else if (RB_TYPE_P(indx, T_REGEXP)) {
         return rb_str_subpat(str, indx, INT2FIX(0));
@@ -6118,8 +6118,8 @@ rb_str_slice_bang(int argc, VALUE *argv, VALUE str)
         len = NUM2LONG(argv[1]);
         goto num_index;
     }
-    else if (FIXNUM_P(indx)) {
-        beg = FIX2LONG(indx);
+    else if (WFIXNUM_P(indx)) {
+        beg = FIX2SV(indx);
         if (!(p = rb_str_subpos(str, beg, &len))) return Qnil;
         if (!len) return Qnil;
         beg = p - RSTRING_PTR(str);
@@ -6797,8 +6797,8 @@ str_bit_offset_from_index(VALUE index)
      * are still accepted below when they fit in uint64_t, mainly for platforms
      * with 32-bit long where large strings can have Bignum bit offsets.
      */
-    if (FIXNUM_P(integer)) {
-        offset.long_value = FIX2LONG(integer);
+    if (WFIXNUM_P(integer)) {
+        offset.long_value = FIX2SV(integer);
         if (offset.long_value < 0) {
             rb_raise(rb_eIndexError, "bit index out of range");
         }
@@ -7300,8 +7300,8 @@ static VALUE
 str_byte_aref(VALUE str, VALUE indx)
 {
     long idx;
-    if (FIXNUM_P(indx)) {
-        idx = FIX2LONG(indx);
+    if (WFIXNUM_P(indx)) {
+        idx = FIX2SV(indx);
     }
     else {
         /* check if indx is Range */
@@ -11641,8 +11641,10 @@ rb_str_sum(int argc, VALUE *argv, VALUE str)
     pend = p + len;
 
     while (p < pend) {
-        if (FIXNUM_MAX - UCHAR_MAX < sum0) {
-            sum = rb_funcall(sum, '+', 1, LONG2FIX(sum0));
+        /* Flush before unsigned long overflow; on LLP64 ULONG_MAX is only
+         * 32 bits, so do not rely on the (wider) Fixnum maximum here. */
+        if (ULONG_MAX - UCHAR_MAX < sum0) {
+            sum = rb_funcall(sum, '+', 1, ULONG2NUM(sum0));
             str_mod_check(str, ptr, len);
             sum0 = 0;
         }
@@ -11652,7 +11654,7 @@ rb_str_sum(int argc, VALUE *argv, VALUE str)
 
     if (bits == 0) {
         if (sum0) {
-            sum = rb_funcall(sum, '+', 1, LONG2FIX(sum0));
+            sum = rb_funcall(sum, '+', 1, ULONG2NUM(sum0));
         }
     }
     else {
@@ -11666,7 +11668,7 @@ rb_str_sum(int argc, VALUE *argv, VALUE str)
             VALUE mod;
 
             if (sum0) {
-                sum = rb_funcall(sum, '+', 1, LONG2FIX(sum0));
+                sum = rb_funcall(sum, '+', 1, ULONG2NUM(sum0));
             }
 
             mod = rb_funcall(INT2FIX(1), idLTLT, 1, INT2FIX(bits));

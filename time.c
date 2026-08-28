@@ -78,7 +78,7 @@ static VALUE sym_hour, sym_min, sym_sec, sym_subsec, sym_dst, sym_zone;
 static int
 eq(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(x) && FIXNUM_P(y)) {
+    if (WFIXNUM_P(x) && WFIXNUM_P(y)) {
         return x == y;
     }
     return RTEST(rb_funcall(x, idEq, 1, y));
@@ -87,7 +87,7 @@ eq(VALUE x, VALUE y)
 static int
 cmp(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(x) && FIXNUM_P(y)) {
+    if (WFIXNUM_P(x) && WFIXNUM_P(y)) {
         if ((long)x < (long)y)
             return -1;
         if ((long)x > (long)y)
@@ -107,8 +107,8 @@ cmp(VALUE x, VALUE y)
 static VALUE
 addv(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(x) && FIXNUM_P(y)) {
-        return LONG2NUM(FIX2LONG(x) + FIX2LONG(y));
+    if (WFIXNUM_P(x) && WFIXNUM_P(y)) {
+        return rb_fix_plus_fix(x, y);
     }
     if (RB_BIGNUM_TYPE_P(x)) return rb_big_plus(x, y);
     return rb_funcall(x, '+', 1, y);
@@ -117,8 +117,8 @@ addv(VALUE x, VALUE y)
 static VALUE
 subv(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(x) && FIXNUM_P(y)) {
-        return LONG2NUM(FIX2LONG(x) - FIX2LONG(y));
+    if (WFIXNUM_P(x) && WFIXNUM_P(y)) {
+        return rb_fix_minus_fix(x, y);
     }
     if (RB_BIGNUM_TYPE_P(x)) return rb_big_minus(x, y);
     return rb_funcall(x, '-', 1, y);
@@ -127,7 +127,7 @@ subv(VALUE x, VALUE y)
 static VALUE
 mulv(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(x) && FIXNUM_P(y)) {
+    if (WFIXNUM_P(x) && WFIXNUM_P(y)) {
         return rb_fix_mul_fix(x, y);
     }
     if (RB_BIGNUM_TYPE_P(x))
@@ -138,7 +138,7 @@ mulv(VALUE x, VALUE y)
 static VALUE
 divv(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(x) && FIXNUM_P(y)) {
+    if (WFIXNUM_P(x) && WFIXNUM_P(y)) {
         return rb_fix_div_fix(x, y);
     }
     if (RB_BIGNUM_TYPE_P(x))
@@ -149,9 +149,9 @@ divv(VALUE x, VALUE y)
 static VALUE
 modv(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(y)) {
-        if (FIX2LONG(y) == 0) rb_num_zerodiv();
-        if (FIXNUM_P(x)) return rb_fix_mod_fix(x, y);
+    if (WFIXNUM_P(y)) {
+        if (FIX2SV(y) == 0) rb_num_zerodiv();
+        if (WFIXNUM_P(x)) return rb_fix_mod_fix(x, y);
     }
     if (RB_BIGNUM_TYPE_P(x)) return rb_big_modulo(x, y);
     return rb_funcall(x, '%', 1, y);
@@ -162,15 +162,16 @@ modv(VALUE x, VALUE y)
 static VALUE
 quor(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(x) && FIXNUM_P(y)) {
-        long a, b, c;
-        a = FIX2LONG(x);
-        b = FIX2LONG(y);
+    if (WFIXNUM_P(x) && WFIXNUM_P(y)) {
+        SIGNED_VALUE a, b, c;
+        a = FIX2SV(x);
+        b = FIX2SV(y);
         if (b == 0) rb_num_zerodiv();
-        if (a == FIXNUM_MIN && b == -1) return LONG2NUM(-a);
+        if (a == RBIMPL_FIXNUM_MIN && b == -1) return rb_int2big(-a);
         c = a / b;
         if (c * b == a) {
-            return LONG2FIX(c);
+            /* The quotient of two wide immediates can exceed C's `long'. */
+            return rb_int2inum(c);
         }
     }
     return rb_numeric_quo(x, y);
@@ -193,9 +194,9 @@ static void
 divmodv(VALUE n, VALUE d, VALUE *q, VALUE *r)
 {
     VALUE tmp, ary;
-    if (FIXNUM_P(d)) {
-        if (FIX2LONG(d) == 0) rb_num_zerodiv();
-        if (FIXNUM_P(n)) {
+    if (WFIXNUM_P(d)) {
+        if (FIX2SV(d) == 0) rb_num_zerodiv();
+        if (WFIXNUM_P(n)) {
             rb_fix_divmod_fix(n, d, q, r);
             return;
         }
@@ -242,12 +243,12 @@ divmodv(VALUE n, VALUE d, VALUE *q, VALUE *r)
 #   define UWIDEINT_MAX ULONG_MAX
 #   define WIDEINT_MAX LONG_MAX
 #   define WIDEINT_MIN LONG_MIN
-#   define FIXWINT_P(v) FIXNUM_P(v)
+#   define FIXWINT_P(v) WFIXNUM_P(v)
 #   define FIXWV_MAX FIXNUM_MAX
 #   define FIXWV_MIN FIXNUM_MIN
 #   define FIXWVABLE(i) FIXABLE(i)
 #   define WINT2FIXWV(i) WIDEVAL_WRAP(LONG2FIX(i))
-#   define FIXWV2WINT(w) FIX2LONG(WIDEVAL_GET(w))
+#   define FIXWV2WINT(w) FIX2SV(WIDEVAL_GET(w))
 #endif
 
 #define SIZEOF_WIDEINT SIZEOF_INT64_T
@@ -350,8 +351,12 @@ v2w(VALUE v)
         v = RRATIONAL(v)->num;
     }
 #if WIDEVALUE_IS_WIDER
-    if (FIXNUM_P(v)) {
-        return WIDEVAL_WRAP((WIDEVALUE)(SIGNED_WIDEVALUE)(long)v);
+    if (WFIXNUM_P(v)) {
+        /* A Ruby immediate and a FIXWV share the same "value << 1 | 1"
+         * encoding, so pass the tagged bits through untouched.  Decoding to a
+         * plain integer here would lose the tag and make FIXWV_P() misread
+         * the result as a heap object. */
+        return WIDEVAL_WRAP((WIDEVALUE)v);
     }
     else if (RB_BIGNUM_TYPE_P(v) &&
         rb_absint_size(v, NULL) <= sizeof(WIDEVALUE)) {
@@ -1624,8 +1629,8 @@ timelocalw(struct vtm *vtm)
     struct vtm vtm1, vtm2;
     int n;
 
-    if (FIXNUM_P(vtm->year)) {
-        long l = FIX2LONG(vtm->year) - 1900;
+    if (WFIXNUM_P(vtm->year)) {
+        SIGNED_VALUE l = FIX2SV(vtm->year) - 1900;
         if (l < INT_MIN || INT_MAX < l)
             goto no_localtime;
         tm.tm_year = (int)l;
@@ -2011,7 +2016,7 @@ timew2timespec_exact(wideval_t timew, struct timespec *ts)
     split_second(timew, &timew2, &subsecx);
     ts->tv_sec = WV2TIMET(timew2);
     nsecv = mulquov(subsecx, INT2FIX(1000000000), INT2FIX(TIME_SCALE));
-    if (!FIXNUM_P(nsecv))
+    if (!WFIXNUM_P(nsecv))
         return NULL;
     ts->tv_nsec = NUM2LONG(nsecv);
     return ts;
@@ -2900,7 +2905,7 @@ time_timespec(VALUE num, int interval)
      (void)0)
 #endif
 
-    if (FIXNUM_P(num)) {
+    if (WFIXNUM_P(num)) {
         t.tv_sec = NUM2TIMET(num);
         arg_range_check(t.tv_sec);
         t.tv_nsec = 0;
@@ -3134,7 +3139,7 @@ month_arg(VALUE arg)
 {
     int i, mon;
 
-    if (FIXNUM_P(arg)) {
+    if (WFIXNUM_P(arg)) {
         return obj2ubits(arg, 4);
     }
 
@@ -4432,9 +4437,9 @@ time_inspect(VALUE time)
     subsec = w2v(wmod(tobj->timew, WINT2FIXWV(TIME_SCALE)));
     if (subsec == INT2FIX(0)) {
     }
-    else if (FIXNUM_P(subsec) && FIX2LONG(subsec) < TIME_SCALE) {
+    else if (WFIXNUM_P(subsec) && FIX2SV(subsec) < TIME_SCALE) {
         long len;
-        rb_str_catf(str, ".%09ld", FIX2LONG(subsec));
+        rb_str_catf(str, ".%09ld", FIX2SV(subsec));
         for (len=RSTRING_LEN(str); RSTRING_PTR(str)[len-1] == '0' && len > 0; len--)
             ;
         rb_str_resize(str, len);
@@ -5356,13 +5361,14 @@ time_xmlschema(int argc, VALUE *argv, VALUE time)
     for (int fill_it = 1, written = snprintf(ptr, len, "%0*ld", prec, n); \
          fill_it; ptr += written, fill_it = 0)
 
-    if (FIXNUM_P(tobj->vtm.year)) {
-        long year = FIX2LONG(tobj->vtm.year);
+    if (WFIXNUM_P(tobj->vtm.year)) {
+        SIGNED_VALUE year = FIX2SV(tobj->vtm.year);
         int year_width = (year < 0) + rb_strlen_lit("YYYY");
         int w = (year >= -9999 && year <= 9999 ? year_width : (year < 0) + (int)DECIMAL_SIZE_OF(year));
         str = rb_usascii_str_new(0, w + size_after_year);
         ptr = RSTRING_PTR(str);
-        fill_digits_long(w + 1, year_width, year) {
+        for (int fill_it = 1, written = snprintf(ptr, w + 1, "%0*" PRIdVALUE, year_width, year);
+             fill_it; ptr += written, fill_it = 0) {
             if (year >= -9999 && year <= 9999) {
                 RUBY_ASSERT(written == year_width);
             }
@@ -5399,6 +5405,8 @@ time_xmlschema(int argc, VALUE *argv, VALUE time)
             if (!RB_INTEGER_TYPE_P(subsecx)) { /* maybe Rational */
                 subsecx = rb_Integer(subsecx);
             }
+            /* Only the legacy Fixnum range is safe for NUM2LONG below; wider
+             * immediates must take the string path just like Bignums did. */
             if (FIXNUM_P(subsecx)) digits = 0;
         }
         if (digits >= 0 && fraction_digits < INT_MAX) {
@@ -5465,15 +5473,19 @@ time_mdump(VALUE time)
 
     gmtimew(tobj->timew, &vtm);
 
-    if (FIXNUM_P(vtm.year)) {
-        year = FIX2LONG(vtm.year);
-        if (year > max_year) {
-            year_extend = INT2FIX(year - max_year);
+    if (WFIXNUM_P(vtm.year)) {
+        /* Decode at full width: a Fixnum can exceed C's `long'. */
+        SIGNED_VALUE yv = RBIMPL_FIXNUM_VALUE(vtm.year);
+        if (yv > max_year) {
+            year_extend = rb_int2inum(yv - max_year);
             year = max_year;
         }
-        else if (year < 1900) {
-            year_extend = LONG2NUM(1900 - year);
+        else if (yv < 1900) {
+            year_extend = rb_int2inum((SIGNED_VALUE)1900 - yv);
             year = 1900;
+        }
+        else {
+            year = (long)yv;
         }
     }
     else {
@@ -5491,7 +5503,7 @@ time_mdump(VALUE time)
 
     nano = mulquov(subsecx, INT2FIX(1000000000), INT2FIX(TIME_SCALE));
     divmodv(nano, INT2FIX(1), &v, &subnano);
-    nsec = FIX2LONG(v);
+    nsec = (long)FIX2SV(v);
     usec = nsec / 1000;
     nsec = nsec % 1000;
 

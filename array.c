@@ -1159,7 +1159,7 @@ rb_ary_initialize(int argc, VALUE *argv, VALUE ary)
         return ary;
     }
     rb_scan_args(argc, argv, "02", &size, &val);
-    if (argc == 1 && !FIXNUM_P(size)) {
+    if (argc == 1 && !WFIXNUM_P(size)) {
         val = rb_check_array_type(size);
         if (!NIL_P(val)) {
             rb_ary_replace(ary, val);
@@ -2722,21 +2722,25 @@ ary_enum_length(VALUE ary, VALUE args, VALUE eobj)
 VALUE
 rb_builtin_ary_at_end(rb_execution_context_t *ec, VALUE self, VALUE index)
 {
-    return FIX2LONG(index) >= RARRAY_LEN(self) ? Qtrue : Qfalse;
+    return FIX2SV(index) >= RARRAY_LEN(self) ? Qtrue : Qfalse;
 }
 
 // Return the element at the given fixnum index.
 VALUE
 rb_builtin_ary_at(rb_execution_context_t *ec, VALUE self, VALUE index)
 {
-    return RARRAY_AREF(self, FIX2LONG(index));
+    return RARRAY_AREF(self, FIX2SV(index));
 }
 
 // Increment a fixnum by 1.
 VALUE
 rb_builtin_fixnum_inc(rb_execution_context_t *ec, VALUE self, VALUE num)
 {
-    return LONG2FIX(FIX2LONG(num) + 1);
+    SIGNED_VALUE i = FIX2SV(num);
+    if (!RBIMPL_FIXABLE(i)) {
+        return rb_int_plus(num, INT2FIX(1));
+    }
+    return RBIMPL_FIXNUM_FROM_VALUE(i + 1);
 }
 
 // Push a value onto an array and return the value.
@@ -3593,9 +3597,9 @@ sort_2(const void *ap, const void *bp, void *dummy)
     VALUE a = *(const VALUE *)ap, b = *(const VALUE *)bp;
     int n;
 
-    if (FIXNUM_P(a) && FIXNUM_P(b) && CMP_OPTIMIZABLE(INTEGER)) {
-        if ((long)a > (long)b) return 1;
-        if ((long)a < (long)b) return -1;
+    if (WFIXNUM_P(a) && WFIXNUM_P(b) && CMP_OPTIMIZABLE(INTEGER)) {
+        if ((SIGNED_VALUE)a > (SIGNED_VALUE)b) return 1;
+        if ((SIGNED_VALUE)a < (SIGNED_VALUE)b) return -1;
         return 0;
     }
     if (STRING_P(a) && STRING_P(b) && CMP_OPTIMIZABLE(STRING)) {
@@ -3745,8 +3749,8 @@ rb_ary_bsearch(VALUE ary)
 {
     VALUE index_result = rb_ary_bsearch_index(ary);
 
-    if (FIXNUM_P(index_result)) {
-        return rb_ary_entry(ary, FIX2LONG(index_result));
+    if (WFIXNUM_P(index_result)) {
+        return rb_ary_entry(ary, FIX2SV(index_result));
     }
     return index_result;
 }
@@ -3776,7 +3780,7 @@ rb_ary_bsearch_index(VALUE ary)
         mid = low + ((high - low) / 2);
         val = rb_ary_entry(ary, mid);
         v = rb_yield(val);
-        if (FIXNUM_P(v)) {
+        if (WFIXNUM_P(v)) {
             if (v == INT2FIX(0)) return INT2FIX(mid);
             smaller = (SIGNED_VALUE)v < 0; /* Fixnum preserves its sign-bit */
         }
@@ -4534,7 +4538,7 @@ rb_ary_slice_bang(int argc, VALUE *argv, VALUE ary)
         return ary_slice_bang_by_rb_ary_splice(ary, pos, len);
     }
 
-    if (!FIXNUM_P(arg1)) {
+    if (!WFIXNUM_P(arg1)) {
         switch (rb_range_beg_len(arg1, &pos, &len, RARRAY_LEN(ary), 0)) {
           case Qtrue:
             /* valid range */
@@ -6158,14 +6162,14 @@ ary_max_opt_fixnum(VALUE ary, long i, VALUE vmax)
 {
     const long n = RARRAY_LEN(ary);
     RUBY_ASSERT(i > 0 && i < n);
-    RUBY_ASSERT(FIXNUM_P(vmax));
+    RUBY_ASSERT(WFIXNUM_P(vmax));
 
     VALUE v;
     for (; i < n; ++i) {
         v = RARRAY_AREF(ary, i);
 
-        if (FIXNUM_P(v)) {
-            if ((long)vmax < (long)v) {
+        if (WFIXNUM_P(v)) {
+            if ((SIGNED_VALUE)vmax < (SIGNED_VALUE)v) {
                 vmax = v;
             }
         }
@@ -6295,7 +6299,7 @@ rb_ary_max(int argc, VALUE *argv, VALUE ary)
     else if (n > 0) {
         result = RARRAY_AREF(ary, 0);
         if (n > 1) {
-            if (FIXNUM_P(result) && CMP_OPTIMIZABLE(INTEGER)) {
+            if (WFIXNUM_P(result) && CMP_OPTIMIZABLE(INTEGER)) {
                 return ary_max_opt_fixnum(ary, 1, result);
             }
             else if (STRING_P(result) && CMP_OPTIMIZABLE(STRING)) {
@@ -6335,14 +6339,14 @@ ary_min_opt_fixnum(VALUE ary, long i, VALUE vmin)
 {
     const long n = RARRAY_LEN(ary);
     RUBY_ASSERT(i > 0 && i < n);
-    RUBY_ASSERT(FIXNUM_P(vmin));
+    RUBY_ASSERT(WFIXNUM_P(vmin));
 
     VALUE a;
     for (; i < n; ++i) {
         a = RARRAY_AREF(ary, i);
 
-        if (FIXNUM_P(a)) {
-            if ((long)vmin > (long)a) {
+        if (WFIXNUM_P(a)) {
+            if ((SIGNED_VALUE)vmin > (SIGNED_VALUE)a) {
                 vmin = a;
             }
         }
@@ -6472,7 +6476,7 @@ rb_ary_min(int argc, VALUE *argv, VALUE ary)
     else if (n > 0) {
         result = RARRAY_AREF(ary, 0);
         if (n > 1) {
-            if (FIXNUM_P(result) && CMP_OPTIMIZABLE(INTEGER)) {
+            if (WFIXNUM_P(result) && CMP_OPTIMIZABLE(INTEGER)) {
                 return ary_min_opt_fixnum(ary, 1, result);
             }
             else if (STRING_P(result) && CMP_OPTIMIZABLE(STRING)) {
@@ -8296,15 +8300,15 @@ rb_ary_dig(int argc, VALUE *argv, VALUE self)
 }
 
 static inline VALUE
-finish_exact_sum(long n, VALUE r, VALUE v, int z)
+finish_exact_sum(SIGNED_VALUE n, VALUE r, VALUE v, int z)
 {
     if (n != 0)
-        v = rb_fix_plus(LONG2FIX(n), v);
+        v = rb_fix_plus(rb_int2inum(n), v);
     if (!UNDEF_P(r)) {
         v = rb_rational_plus(r, v);
     }
     else if (!n && z) {
-        v = rb_fix_plus(LONG2FIX(0), v);
+        v = rb_fix_plus(INT2FIX(0), v);
     }
     return v;
 }
@@ -8354,7 +8358,8 @@ static VALUE
 rb_ary_sum(int argc, VALUE *argv, VALUE ary)
 {
     VALUE e, v, r;
-    long i, n;
+    long i;
+    SIGNED_VALUE n;
     int block_given;
 
     v = (rb_check_arity(argc, 0, 1) ? argv[0] : LONG2FIX(0));
@@ -8380,10 +8385,21 @@ rb_ary_sum(int argc, VALUE *argv, VALUE ary)
         e = RARRAY_AREF(ary, i);
         if (block_given)
             e = rb_yield(e);
-        if (FIXNUM_P(e)) {
-            n += FIX2LONG(e); /* should not overflow long type */
-            if (!FIXABLE(n)) {
-                v = rb_big_plus(LONG2NUM(n), v);
+        if (WFIXNUM_P(e)) {
+            SIGNED_VALUE x = FIX2SV(e);
+            if (ADD_OVERFLOW_SIGNED_INTEGER_P(n, x, RBIMPL_FIXNUM_MIN, RBIMPL_FIXNUM_MAX)) {
+                if (n) {
+                    v = rb_int_plus(rb_int2inum(n), v);
+                    n = 0;
+                }
+                if (!RBIMPL_FIXABLE(x)) {
+                    v = rb_big_plus(rb_int2big(x), v);
+                    goto next_sum_element;
+                }
+            }
+            n += x;
+            if (!RBIMPL_FIXABLE(n)) {
+                v = rb_big_plus(rb_int2big(n), v);
                 n = 0;
             }
         }
@@ -8397,6 +8413,7 @@ rb_ary_sum(int argc, VALUE *argv, VALUE ary)
         }
         else
             goto not_exact;
+      next_sum_element: ;
     }
     v = finish_exact_sum(n, r, v, argc!=0);
     if (init_is_float) v = rb_float_plus(argv[0], v);
@@ -8423,8 +8440,8 @@ rb_ary_sum(int argc, VALUE *argv, VALUE ary)
             if (RB_FLOAT_TYPE_P(e))
               has_float_value:
                 x = RFLOAT_VALUE(e);
-            else if (FIXNUM_P(e))
-                x = FIX2LONG(e);
+            else if (WFIXNUM_P(e))
+                x = FIX2SV(e);
             else if (RB_BIGNUM_TYPE_P(e))
                 x = rb_big2dbl(e);
             else if (RB_TYPE_P(e, T_RATIONAL))

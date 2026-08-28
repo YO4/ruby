@@ -50,7 +50,7 @@ RBIMPL_WARNING_POP()
 
 #define GMP_GCD_DIGITS 1
 
-#define INT_ZERO_P(x) (FIXNUM_P(x) ? FIXNUM_ZERO_P(x) : rb_bigzero_p(x))
+#define INT_ZERO_P(x) (WFIXNUM_P(x) ? FIXNUM_ZERO_P(x) : rb_bigzero_p(x))
 
 VALUE rb_cRational;
 
@@ -90,7 +90,7 @@ f_div(VALUE x, VALUE y)
 inline static int
 f_lt_p(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(x) && FIXNUM_P(y))
+    if (WFIXNUM_P(x) && WFIXNUM_P(y))
         return (SIGNED_VALUE)x < (SIGNED_VALUE)y;
     if (RB_INTEGER_TYPE_P(x)) {
         VALUE r = rb_int_cmp(x, y);
@@ -127,7 +127,7 @@ f_mul(VALUE x, VALUE y)
 inline static VALUE
 f_sub(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(y) && FIXNUM_ZERO_P(y))
+    if (WFIXNUM_P(y) && FIXNUM_ZERO_P(y))
         return x;
     return rb_funcall(x, '-', 1, y);
 }
@@ -158,7 +158,7 @@ f_to_i(VALUE x)
 inline static int
 f_eqeq_p(VALUE x, VALUE y)
 {
-    if (FIXNUM_P(x) && FIXNUM_P(y))
+    if (WFIXNUM_P(x) && WFIXNUM_P(y))
         return x == y;
     if (RB_INTEGER_TYPE_P(x))
         return RTEST(rb_int_equal(x, y));
@@ -279,10 +279,10 @@ rb_gcd_gmp(VALUE x, VALUE y)
 #define f_gcd f_gcd_orig
 #endif
 
-inline static long
-i_gcd(long x, long y)
+inline static SIGNED_VALUE
+i_gcd(SIGNED_VALUE x, SIGNED_VALUE y)
 {
-    unsigned long u, v, t;
+    uintptr_t u, v, t;
     int shift;
 
     if (x < 0)
@@ -295,8 +295,8 @@ i_gcd(long x, long y)
     if (y == 0)
         return x;
 
-    u = (unsigned long)x;
-    v = (unsigned long)y;
+    u = (uintptr_t)x;
+    v = (uintptr_t)y;
     for (shift = 0; ((u | v) & 1) == 0; ++shift) {
         u >>= 1;
         v >>= 1;
@@ -317,7 +317,7 @@ i_gcd(long x, long y)
         v = v - u;
     } while (v != 0);
 
-    return (long)(u << shift);
+    return (SIGNED_VALUE)(u << shift);
 }
 
 inline static VALUE
@@ -325,8 +325,8 @@ f_gcd_normal(VALUE x, VALUE y)
 {
     VALUE z;
 
-    if (FIXNUM_P(x) && FIXNUM_P(y))
-        return LONG2NUM(i_gcd(FIX2LONG(x), FIX2LONG(y)));
+    if (WFIXNUM_P(x) && WFIXNUM_P(y))
+        return rb_int2inum(i_gcd(FIX2SV(x), FIX2SV(y)));
 
     if (INT_NEGATIVE_P(x))
         x = rb_int_uminus(x);
@@ -339,11 +339,11 @@ f_gcd_normal(VALUE x, VALUE y)
         return x;
 
     for (;;) {
-        if (FIXNUM_P(x)) {
+        if (WFIXNUM_P(x)) {
             if (FIXNUM_ZERO_P(x))
                 return y;
-            if (FIXNUM_P(y))
-                return LONG2NUM(i_gcd(FIX2LONG(x), FIX2LONG(y)));
+            if (WFIXNUM_P(y))
+                return rb_int2inum(i_gcd(FIX2SV(x), FIX2SV(y)));
         }
         z = x;
         x = rb_int_modulo(y, x);
@@ -615,21 +615,21 @@ rb_rational_uminus(VALUE self)
 #endif
 
 inline static VALUE
-f_imul(long a, long b)
+f_imul(SIGNED_VALUE a, SIGNED_VALUE b)
 {
     VALUE r;
 
     if (a == 0 || b == 0)
         return ZERO;
     else if (a == 1)
-        return LONG2NUM(b);
+        return rb_int2inum(b);
     else if (b == 1)
-        return LONG2NUM(a);
+        return rb_int2inum(a);
 
     if (MUL_OVERFLOW_LONG_P(a, b))
         r = rb_big_mul(rb_int2big(a), rb_int2big(b));
     else
-        r = LONG2NUM(a * b);
+        r = rb_int2inum(a * b);
     return r;
 }
 
@@ -637,10 +637,10 @@ f_imul(long a, long b)
 #undef f_imul
 
 inline static VALUE
-f_imul(long x, long y)
+f_imul(SIGNED_VALUE x, SIGNED_VALUE y)
 {
     VALUE r = f_imul_orig(x, y);
-    RUBY_ASSERT(f_eqeq_p(r, f_mul(LONG2NUM(x), LONG2NUM(y))));
+    RUBY_ASSERT(f_eqeq_p(r, f_mul(rb_int2inum(x), rb_int2inum(y))));
     return r;
 }
 #endif
@@ -650,15 +650,15 @@ f_addsub(VALUE self, VALUE anum, VALUE aden, VALUE bnum, VALUE bden, int k)
 {
     VALUE num, den;
 
-    if (FIXNUM_P(anum) && FIXNUM_P(aden) &&
-        FIXNUM_P(bnum) && FIXNUM_P(bden)) {
-        long an = FIX2LONG(anum);
-        long ad = FIX2LONG(aden);
-        long bn = FIX2LONG(bnum);
-        long bd = FIX2LONG(bden);
-        long ig = i_gcd(ad, bd);
+    if (WFIXNUM_P(anum) && WFIXNUM_P(aden) &&
+        WFIXNUM_P(bnum) && WFIXNUM_P(bden)) {
+        SIGNED_VALUE an = FIX2SV(anum);
+        SIGNED_VALUE ad = FIX2SV(aden);
+        SIGNED_VALUE bn = FIX2SV(bnum);
+        SIGNED_VALUE bd = FIX2SV(bden);
+        SIGNED_VALUE ig = i_gcd(ad, bd);
 
-        VALUE g = LONG2NUM(ig);
+        VALUE g = rb_int2inum(ig);
         VALUE a = f_imul(an, bd / ig);
         VALUE b = f_imul(bn, ad / ig);
         VALUE c;
@@ -828,14 +828,14 @@ f_muldiv(VALUE self, VALUE anum, VALUE aden, VALUE bnum, VALUE bden, int k)
         bden = t;
     }
 
-    if (FIXNUM_P(anum) && FIXNUM_P(aden) &&
-        FIXNUM_P(bnum) && FIXNUM_P(bden)) {
-        long an = FIX2LONG(anum);
-        long ad = FIX2LONG(aden);
-        long bn = FIX2LONG(bnum);
-        long bd = FIX2LONG(bden);
-        long g1 = i_gcd(an, bd);
-        long g2 = i_gcd(ad, bn);
+    if (WFIXNUM_P(anum) && WFIXNUM_P(aden) &&
+        WFIXNUM_P(bnum) && WFIXNUM_P(bden)) {
+        SIGNED_VALUE an = FIX2SV(anum);
+        SIGNED_VALUE ad = FIX2SV(aden);
+        SIGNED_VALUE bn = FIX2SV(bnum);
+        SIGNED_VALUE bd = FIX2SV(bden);
+        SIGNED_VALUE g1 = i_gcd(an, bd);
+        SIGNED_VALUE g2 = i_gcd(ad, bn);
 
         num = f_imul(an / g1, bn / g2);
         den = f_imul(ad / g2, bd / g1);
@@ -959,7 +959,7 @@ rb_rational_fdiv(VALUE self, VALUE other)
     VALUE div;
     if (f_zero_p(other))
         return rb_rational_div(self, rb_float_new(0.0));
-    if (FIXNUM_P(other) && other == LONG2FIX(1))
+    if (WFIXNUM_P(other) && other == LONG2FIX(1))
         return nurat_to_f(self);
     div = rb_rational_div(self, other);
     if (RB_TYPE_P(div, T_RATIONAL))
@@ -1017,7 +1017,7 @@ rb_rational_pow(VALUE self, VALUE other)
     }
 
     /* General case */
-    if (FIXNUM_P(other)) {
+    if (WFIXNUM_P(other)) {
         {
             VALUE num, den;
 
@@ -1107,10 +1107,10 @@ rb_rational_cmp(VALUE self, VALUE other)
 
             get_dat2(self, other);
 
-            if (FIXNUM_P(adat->num) && FIXNUM_P(adat->den) &&
-                FIXNUM_P(bdat->num) && FIXNUM_P(bdat->den)) {
-                num1 = f_imul(FIX2LONG(adat->num), FIX2LONG(bdat->den));
-                num2 = f_imul(FIX2LONG(bdat->num), FIX2LONG(adat->den));
+            if (WFIXNUM_P(adat->num) && WFIXNUM_P(adat->den) &&
+                WFIXNUM_P(bdat->num) && WFIXNUM_P(bdat->den)) {
+                num1 = f_imul(FIX2SV(adat->num), FIX2SV(bdat->den));
+                num2 = f_imul(FIX2SV(bdat->num), FIX2SV(adat->den));
             }
             else {
                 num1 = rb_int_mul(adat->num, bdat->den);
@@ -1149,9 +1149,9 @@ nurat_eqeq_p(VALUE self, VALUE other)
             if (INT_ZERO_P(dat->num) && INT_ZERO_P(other))
                 return Qtrue;
 
-            if (!FIXNUM_P(dat->den))
+            if (!WFIXNUM_P(dat->den))
                 return Qfalse;
-            if (FIX2LONG(dat->den) != 1)
+            if (FIX2SV(dat->den) != 1)
                 return Qfalse;
             return rb_int_equal(dat->num, other);
         }
@@ -2335,7 +2335,7 @@ isletterr(int c)
 static VALUE
 negate_num(VALUE num)
 {
-    if (FIXNUM_P(num)) {
+    if (WFIXNUM_P(num)) {
         return rb_int_uminus(num);
     }
     else {
@@ -2457,8 +2457,8 @@ parse_rat(const char *s, const char *const e, int strict, int raise)
     if (nexp != ZERO) {
         if (INT_NEGATIVE_P(nexp)) {
             VALUE mul;
-            if (FIXNUM_P(nexp)) {
-                mul = f_expt10(LONG2NUM(-FIX2LONG(nexp)));
+            if (WFIXNUM_P(nexp)) {
+                mul = f_expt10(LONG2NUM(-FIX2SV(nexp)));
                 if (! RB_FLOAT_TYPE_P(mul)) {
                     num = rb_int_mul(num, mul);
                     goto reduce;
@@ -2468,7 +2468,7 @@ parse_rat(const char *s, const char *const e, int strict, int raise)
         }
         else {
             VALUE div;
-            if (FIXNUM_P(nexp)) {
+            if (WFIXNUM_P(nexp)) {
                 div = f_expt10(nexp);
                 if (! RB_FLOAT_TYPE_P(div)) {
                     den = rb_int_mul(den, div);

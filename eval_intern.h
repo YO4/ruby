@@ -184,7 +184,7 @@ rb_ec_tag_jump(const rb_execution_context_t *ec, enum ruby_tag_type st)
 
 #define EC_JUMP_TAG(ec, st) rb_ec_tag_jump(ec, st)
 
-#define INTERNAL_EXCEPTION_P(exc) FIXNUM_P(exc)
+#define INTERNAL_EXCEPTION_P(exc) WFIXNUM_P(exc)
 
 /* CREF operators */
 

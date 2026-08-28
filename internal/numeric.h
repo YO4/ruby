@@ -181,7 +181,7 @@ VALUE rb_int128_to_numeric(rb_int128_t n);
 static inline bool
 INT_POSITIVE_P(VALUE num)
 {
-    if (FIXNUM_P(num)) {
+    if (WFIXNUM_P(num)) {
         return FIXNUM_POSITIVE_P(num);
     }
     else {
@@ -192,7 +192,7 @@ INT_POSITIVE_P(VALUE num)
 static inline bool
 INT_NEGATIVE_P(VALUE num)
 {
-    if (FIXNUM_P(num)) {
+    if (WFIXNUM_P(num)) {
         return FIXNUM_NEGATIVE_P(num);
     }
     else {
@@ -222,7 +222,7 @@ rb_num_positive_int_p(VALUE num)
 {
     const ID mid = '>';
 
-    if (FIXNUM_P(num)) {
+    if (WFIXNUM_P(num)) {
         if (rb_method_basic_definition_p(rb_cInteger, mid))
             return FIXNUM_POSITIVE_P(num);
     }
@@ -238,7 +238,7 @@ rb_num_negative_int_p(VALUE num)
 {
     const ID mid = '<';
 
-    if (FIXNUM_P(num)) {
+    if (WFIXNUM_P(num)) {
         if (rb_method_basic_definition_p(rb_cInteger, mid))
             return FIXNUM_NEGATIVE_P(num);
     }

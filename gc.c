@@ -1419,7 +1419,7 @@ rb_gc_declare_weak_references(VALUE obj)
 bool
 rb_gc_handle_weak_references_alive_p(VALUE obj)
 {
-    if (SPECIAL_CONST_P(obj)) return true;
+    if (WSPECIAL_CONST_P(obj)) return true;
 
     return rb_gc_impl_handle_weak_references_alive_p(rb_gc_get_objspace(), obj);
 }
@@ -2242,13 +2242,13 @@ rb_objspace_free_objects(void *objspace)
 int
 rb_objspace_garbage_object_p(VALUE obj)
 {
-    return !SPECIAL_CONST_P(obj) && rb_gc_impl_garbage_object_p(rb_gc_get_objspace(), obj);
+    return !WSPECIAL_CONST_P(obj) && rb_gc_impl_garbage_object_p(rb_gc_get_objspace(), obj);
 }
 
 int
 rb_objspace_foreign_object_p(VALUE obj)
 {
-    return !SPECIAL_CONST_P(obj) && rb_gc_obj_foreign_p(obj);
+    return !WSPECIAL_CONST_P(obj) && rb_gc_obj_foreign_p(obj);
 }
 
 #define OBJ_ID_INCREMENT (RUBY_IMMEDIATE_MASK + 1)
@@ -2304,7 +2304,7 @@ object_id_get(VALUE obj, shape_id_t shape_id)
     }
 
 #if RUBY_DEBUG
-    if (!(FIXNUM_P(id) || RB_TYPE_P(id, T_BIGNUM))) {
+    if (!(WFIXNUM_P(id) || RB_TYPE_P(id, T_BIGNUM))) {
         rb_p(obj);
         rb_bug("Object's shape includes object_id, but it's missing %s", rb_obj_info(obj));
     }
@@ -2363,7 +2363,7 @@ object_id(VALUE obj)
 void
 rb_gc_obj_free_vm_weak_references(VALUE obj)
 {
-    ASSUME(!RB_SPECIAL_CONST_P(obj));
+    ASSUME(!WSPECIAL_CONST_P(obj));
 
     /* Drop a generic-fields entry when its host's slot is freed.  The table is
      * process-wide, so no sweep bulk-wipes it; a stale entry would let the global GC's
@@ -2401,7 +2401,7 @@ rb_gc_obj_free_vm_weak_references(VALUE obj)
 static VALUE
 rb_find_object_id(void *objspace, VALUE obj, VALUE (*get_heap_object_id)(VALUE))
 {
-    if (SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
 #if SIZEOF_LONG == SIZEOF_VOIDP
         return LONG2NUM((SIGNED_VALUE)obj);
 #else
@@ -2544,7 +2544,7 @@ rb_obj_memsize_of(VALUE obj)
 {
     size_t size = 0;
 
-    if (SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
         return 0;
     }
 
@@ -2846,7 +2846,7 @@ gc_mark_func_data_slotp_of(rb_ractor_t *const cr)
 /* Marking pays this block per marked reference, so the current Ractor is
  * resolved once and both the redirect slot and the objspace derive from it. */
 #define RB_GC_MARK_OR_TRAVERSE(func, obj_or_ptr, obj, check_obj) do { \
-    if (!RB_SPECIAL_CONST_P(obj)) { \
+    if (!WSPECIAL_CONST_P(obj)) { \
         rb_ractor_t *const mark_cr = rb_current_ractor_raw(false); \
         struct gc_mark_func_data_struct **mfdp = gc_mark_func_data_slotp_of(mark_cr); \
         struct gc_mark_func_data_struct *mark_func_data = *mfdp; \
@@ -3087,7 +3087,7 @@ gc_mark_machine_stack_location_maybe(VALUE obj, void *data)
 static bool
 gc_object_moved_p_internal(void *objspace, VALUE obj)
 {
-    if (SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
         return false;
     }
 
@@ -3097,7 +3097,7 @@ gc_object_moved_p_internal(void *objspace, VALUE obj)
 static VALUE
 gc_location_internal(void *objspace, VALUE value)
 {
-    if (SPECIAL_CONST_P(value)) {
+    if (WSPECIAL_CONST_P(value)) {
         return value;
     }
 
@@ -3760,7 +3760,7 @@ rb_gc_obj_became_shareable(VALUE obj)
 void
 rb_gc_pin_in_flight_message(VALUE obj)
 {
-    if (RB_SPECIAL_CONST_P(obj)) return;
+    if (WSPECIAL_CONST_P(obj)) return;
 
     rb_gc_impl_pin_in_flight_message(rb_gc_get_objspace(), obj);
 }
@@ -4690,7 +4690,7 @@ vm_weak_table_sym_set_foreach(VALUE *sym_ptr, void *data)
     VALUE sym = *sym_ptr;
     struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
 
-    if (RB_SPECIAL_CONST_P(sym)) return ST_CONTINUE;
+    if (WSPECIAL_CONST_P(sym)) return ST_CONTINUE;
 
     int ret = iter_data->callback(sym, iter_data->data);
 
@@ -5253,7 +5253,7 @@ gc_stat_heap(rb_execution_context_t *ec, VALUE self, VALUE heap_name, VALUE arg)
             rb_raise(rb_eTypeError, "non-hash given");
         }
     }
-    else if (FIXNUM_P(heap_name)) {
+    else if (WFIXNUM_P(heap_name)) {
         if (!SYMBOL_P(arg) && !RB_TYPE_P(arg, T_HASH)) {
             rb_raise(rb_eTypeError, "non-hash or symbol given");
         }
@@ -5431,7 +5431,7 @@ rb_objspace_reachable_objects_from(VALUE obj, void (func)(VALUE, void *), void *
     RB_VM_LOCKING() {
         if (rb_gc_impl_during_gc_p(rb_gc_get_objspace())) rb_bug("rb_objspace_reachable_objects_from() is not supported while during GC");
 
-        if (!RB_SPECIAL_CONST_P(obj)) {
+        if (!WSPECIAL_CONST_P(obj)) {
             struct gc_mark_func_data_struct **mfdp = GC_MARK_FUNC_DATA_SLOTP();
             struct gc_mark_func_data_struct *prev_mfd = *mfdp;
             struct gc_mark_func_data_struct mfd = {
@@ -5591,11 +5591,11 @@ rb_raw_obj_info_common(char *const buff, const size_t buff_size, const VALUE obj
 {
     size_t pos = 0;
 
-    if (SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
         APPEND_F("%s", obj_type_name(obj));
 
-        if (FIXNUM_P(obj)) {
-            APPEND_F(" %ld", FIX2LONG(obj));
+        if (WFIXNUM_P(obj)) {
+            APPEND_F(" %ld", FIX2SV(obj));
         }
         else if (SYMBOL_P(obj)) {
             APPEND_F(" %s", rb_id2name(SYM2ID(obj)));
@@ -5647,7 +5647,7 @@ const char *rb_raw_obj_info(char *const buff, const size_t buff_size, VALUE obj)
 static size_t
 rb_raw_obj_info_buitin_type(char *const buff, const size_t buff_size, const VALUE obj, size_t pos)
 {
-    if (LIKELY(pos < buff_size) && !SPECIAL_CONST_P(obj)) {
+    if (LIKELY(pos < buff_size) && !WSPECIAL_CONST_P(obj)) {
         const enum ruby_value_type type = BUILTIN_TYPE(obj);
 
         switch (type) {
@@ -5910,7 +5910,7 @@ rb_raw_obj_info(char *const buff, const size_t buff_size, VALUE obj)
 {
     void *objspace = rb_gc_get_objspace();
 
-    if (SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
         raw_obj_info(buff, buff_size, obj);
     }
     else if (!rb_gc_impl_live_object_p(objspace, (const void *)obj)) {
@@ -6463,7 +6463,7 @@ rb_gc_verify_shareable(VALUE obj)
         .err_count = 0,
     };
 
-    if (!RB_SPECIAL_CONST_P(obj)) {
+    if (!WSPECIAL_CONST_P(obj)) {
         struct gc_mark_func_data_struct **mfdp = GC_MARK_FUNC_DATA_SLOTP();
         struct gc_mark_func_data_struct *prev_mfd = *mfdp;
         struct gc_mark_func_data_struct mfd = {

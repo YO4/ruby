@@ -102,7 +102,7 @@ Init_var_tables(void)
 static inline bool
 rb_namespace_p(VALUE obj)
 {
-    if (RB_SPECIAL_CONST_P(obj)) return false;
+    if (WSPECIAL_CONST_P(obj)) return false;
     switch (RB_BUILTIN_TYPE(obj)) {
       case T_MODULE: case T_CLASS: return true;
       default: break;
@@ -1512,7 +1512,7 @@ rb_obj_replace_fields(VALUE obj, VALUE fields_obj)
 VALUE
 rb_obj_field_get(VALUE obj, shape_id_t target_shape_id)
 {
-    RUBY_ASSERT(!SPECIAL_CONST_P(obj));
+    RUBY_ASSERT(!WSPECIAL_CONST_P(obj));
     RUBY_ASSERT(RSHAPE_TYPE_P(target_shape_id, SHAPE_IVAR) || RSHAPE_TYPE_P(target_shape_id, SHAPE_OBJ_ID));
 
     VALUE fields_obj = rb_obj_fields(obj, RSHAPE_EDGE_NAME(target_shape_id));
@@ -1532,7 +1532,7 @@ rb_obj_field_get(VALUE obj, shape_id_t target_shape_id)
 VALUE
 rb_ivar_lookup(VALUE obj, ID id, VALUE undef)
 {
-    if (SPECIAL_CONST_P(obj)) return undef;
+    if (WSPECIAL_CONST_P(obj)) return undef;
 
     int type = BUILTIN_TYPE(obj);
     bool is_class = type == T_CLASS || type == T_MODULE;
@@ -1778,7 +1778,7 @@ imemo_fields_shref_i(ID key, VALUE val, st_data_t arg)
     /* The fields_obj became shareable while this field value stayed unshareable (a
      * hidden [path, line] ivar, say, which make_shareable's traversal never reaches):
      * record a shref so the shareable -> unshareable edge is tracked. */
-    if (!SPECIAL_CONST_P(val) && !RB_OBJ_SHAREABLE_P(val)) {
+    if (!WSPECIAL_CONST_P(val) && !RB_OBJ_SHAREABLE_P(val)) {
         rb_gc_writebarrier(fields_obj, val);
     }
     return ST_CONTINUE;
@@ -2118,7 +2118,7 @@ ivar_defined0(VALUE obj, ID id)
 VALUE
 rb_ivar_defined(VALUE obj, ID id)
 {
-    if (SPECIAL_CONST_P(obj)) return Qfalse;
+    if (WSPECIAL_CONST_P(obj)) return Qfalse;
 
     VALUE defined = Qfalse;
     switch (BUILTIN_TYPE(obj)) {
@@ -2319,7 +2319,7 @@ rb_generic_fields_tables_foreach(void (*cb)(struct st_table *tbl, void *arg), vo
 void
 rb_field_foreach(VALUE obj, rb_ivar_foreach_callback_func *func, st_data_t arg, bool ivar_only)
 {
-    if (SPECIAL_CONST_P(obj)) return;
+    if (WSPECIAL_CONST_P(obj)) return;
     switch (BUILTIN_TYPE(obj)) {
       case T_IMEMO:
         if (IMEMO_TYPE_P(obj, imemo_fields)) {
@@ -2394,7 +2394,7 @@ rb_ivar_foreach_buffered(VALUE obj, rb_ivar_foreach_callback_func *func, st_data
 st_index_t
 rb_ivar_count(VALUE obj)
 {
-    if (SPECIAL_CONST_P(obj)) return 0;
+    if (WSPECIAL_CONST_P(obj)) return 0;
 
     st_index_t iv_count = 0;
     VALUE fields_obj = rb_obj_fields_no_ractor_check(obj);
@@ -3987,7 +3987,7 @@ rb_define_const(VALUE klass, const char *name, VALUE val)
     if (!rb_is_const_id(id)) {
         rb_warn("rb_define_const: invalid name '%s' for constant", name);
     }
-    if (!RB_SPECIAL_CONST_P(val)) {
+    if (!WSPECIAL_CONST_P(val)) {
         rb_vm_register_global_object(val);
     }
     rb_const_set(klass, id, val);

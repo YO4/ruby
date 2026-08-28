@@ -437,7 +437,7 @@ rb_f_kill(int argc, const VALUE *argv)
 
     rb_check_arity(argc, 2, UNLIMITED_ARGUMENTS);
 
-    if (FIXNUM_P(argv[0])) {
+    if (WFIXNUM_P(argv[0])) {
         sig = FIX2INT(argv[0]);
     }
     else {
@@ -1274,7 +1274,7 @@ trap_signm(VALUE vsig)
 {
     int sig = -1;
 
-    if (FIXNUM_P(vsig)) {
+    if (WFIXNUM_P(vsig)) {
         sig = FIX2INT(vsig);
         if (sig < 0 || sig >= NSIG) {
             rb_raise(rb_eArgError, "invalid signal number (%d)", sig);

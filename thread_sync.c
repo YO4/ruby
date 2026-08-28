@@ -786,7 +786,7 @@ queue_timeout2hrtime(VALUE timeout)
         return (rb_hrtime_t)0;
     }
     rb_hrtime_t rel = 0;
-    if (FIXNUM_P(timeout)) {
+    if (WFIXNUM_P(timeout)) {
         rel = rb_sec2hrtime(NUM2TIMET(timeout));
     }
     else {

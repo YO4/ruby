@@ -1548,7 +1548,7 @@ static inline void
 VM_ENV_FLAGS_SET(const VALUE *ep, VALUE flag)
 {
     VALUE flags = ep[VM_ENV_DATA_INDEX_FLAGS];
-    VM_ASSERT(FIXNUM_P(flags));
+    VM_ASSERT(WFIXNUM_P(flags));
     VM_FORCE_WRITE_SPECIAL_CONST(&ep[VM_ENV_DATA_INDEX_FLAGS], flags | flag);
 }
 
@@ -1556,7 +1556,7 @@ static inline void
 VM_ENV_FLAGS_UNSET(const VALUE *ep, VALUE flag)
 {
     VALUE flags = ep[VM_ENV_DATA_INDEX_FLAGS];
-    VM_ASSERT(FIXNUM_P(flags));
+    VM_ASSERT(WFIXNUM_P(flags));
     VM_FORCE_WRITE_SPECIAL_CONST(&ep[VM_ENV_DATA_INDEX_FLAGS], flags & ~flag);
 }
 
@@ -1564,7 +1564,7 @@ static inline unsigned long
 VM_ENV_FLAGS(const VALUE *ep, long flag)
 {
     VALUE flags = ep[VM_ENV_DATA_INDEX_FLAGS];
-    VM_ASSERT(FIXNUM_P(flags));
+    VM_ASSERT(WFIXNUM_P(flags));
     return flags & flag;
 }
 
@@ -1780,7 +1780,7 @@ VM_FORCE_WRITE(const VALUE *ptr, VALUE v)
 static inline void
 VM_FORCE_WRITE_SPECIAL_CONST(const VALUE *ptr, VALUE special_const_value)
 {
-    VM_ASSERT(RB_SPECIAL_CONST_P(special_const_value));
+    VM_ASSERT(WSPECIAL_CONST_P(special_const_value));
     VM_FORCE_WRITE(ptr, special_const_value);
 }
 

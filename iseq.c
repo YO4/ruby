@@ -60,7 +60,7 @@ static unsigned int *succ_index_table_invert(int max_pos, struct succ_index_tabl
 static int succ_index_lookup(const struct succ_index_table *sd, int x);
 #endif
 
-#define hidden_obj_p(obj) (!SPECIAL_CONST_P(obj) && !RBASIC(obj)->klass)
+#define hidden_obj_p(obj) (!WSPECIAL_CONST_P(obj) && !RBASIC(obj)->klass)
 
 static inline VALUE
 obj_resurrect(VALUE obj)
@@ -1150,7 +1150,7 @@ rb_iseq_new_with_opt(VALUE ast_value, VALUE name, VALUE path, VALUE realpath,
 /**
  * Core implementation for building a prism iseq. This does not use rb_protect,
  * so any exceptions (e.g. from finish_iseq_build) propagate normally up the
- * call stack — matching the parse.y compiler's behavior.
+ * call stack  Ematching the parse.y compiler's behavior.
  */
 rb_iseq_t *
 pm_iseq_build(pm_scope_node_t *node, VALUE name, VALUE path, VALUE realpath,
@@ -1219,7 +1219,7 @@ pm_iseq_new_with_opt_try(VALUE d)
  * This function uses rb_protect to catch exceptions, storing the error state
  * in the provided out parameter. This is only needed at top-level entry points
  * where the caller wants to handle errors gracefully. Child iseqs compiled
- * during the compilation process do NOT go through this function — they use
+ * during the compilation process do NOT go through this function  Ethey use
  * pm_iseq_build directly, letting exceptions propagate naturally (matching
  * the parse.y compiler's behavior).
  */
@@ -1264,7 +1264,7 @@ rb_iseq_load_iseq(VALUE fname)
 {
     VALUE iseqv = rb_check_funcall(rb_cISeq, rb_intern("load_iseq"), 1, &fname);
 
-    if (!SPECIAL_CONST_P(iseqv) && RBASIC_CLASS(iseqv) == rb_cISeq) {
+    if (!WSPECIAL_CONST_P(iseqv) && RBASIC_CLASS(iseqv) == rb_cISeq) {
         return iseqw_check(iseqv);
     }
 
@@ -1279,7 +1279,7 @@ rb_iseq_compile_iseq(VALUE str, VALUE fname)
     };
     VALUE iseqv = rb_check_funcall(rb_cISeq, rb_intern("compile"), 2, args);
 
-    if (!SPECIAL_CONST_P(iseqv) && RBASIC_CLASS(iseqv) == rb_cISeq) {
+    if (!WSPECIAL_CONST_P(iseqv) && RBASIC_CLASS(iseqv) == rb_cISeq) {
         return iseqw_check(iseqv);
     }
 
@@ -2662,7 +2662,7 @@ rb_insn_operand_intern(const rb_iseq_t *iseq,
 
       case TS_VALUE:		/* VALUE */
         op = obj_resurrect(op);
-        if (insn == BIN(defined) && op_no == 1 && FIXNUM_P(op)) {
+        if (insn == BIN(defined) && op_no == 1 && WFIXNUM_P(op)) {
             /* should be DEFINED_REF */
             int type = NUM2INT(op);
             if (type) {

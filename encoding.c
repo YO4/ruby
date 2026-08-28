@@ -938,7 +938,7 @@ rb_enc_find(const char *name)
 static inline int
 enc_capable(VALUE obj)
 {
-    if (SPECIAL_CONST_P(obj)) return SYMBOL_P(obj);
+    if (WSPECIAL_CONST_P(obj)) return SYMBOL_P(obj);
     switch (BUILTIN_TYPE(obj)) {
       case T_STRING:
       case T_REGEXP:
@@ -994,7 +994,7 @@ rb_enc_get_index(VALUE obj)
     int i = -1;
     VALUE tmp;
 
-    if (SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
         if (!SYMBOL_P(obj)) return -1;
         obj = rb_sym2str(obj);
     }
@@ -1072,7 +1072,7 @@ rb_enc_associate_index(VALUE obj, int idx)
     oldidx = rb_enc_get_index(obj);
     if (oldidx == idx)
         return obj;
-    if (SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
         rb_raise(rb_eArgError, "cannot set encoding");
     }
     enc = must_encindex(idx);

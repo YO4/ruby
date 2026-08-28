@@ -29,7 +29,7 @@ cmperr_subject(VALUE y)
 {
     VALUE classname;
 
-    if (SPECIAL_CONST_P(y) || BUILTIN_TYPE(y) == T_FLOAT) {
+    if (WSPECIAL_CONST_P(y) || BUILTIN_TYPE(y) == T_FLOAT) {
         classname = rb_inspect(y);
     }
     else {

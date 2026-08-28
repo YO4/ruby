@@ -388,7 +388,7 @@ static inline VALUE
 rb_ractor_confirm_belonging(VALUE obj)
 {
     if (rb_ractor_ignore_belonging_flag) return obj;
-    if (SPECIAL_CONST_P(obj) || RB_OBJ_SHAREABLE_P(obj)) return obj;
+    if (WSPECIAL_CONST_P(obj) || RB_OBJ_SHAREABLE_P(obj)) return obj;
 
     if (UNLIKELY(rb_gc_obj_foreign_p(obj))) {
         rp(obj);

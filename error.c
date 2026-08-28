@@ -1291,7 +1291,7 @@ builtin_class_name(VALUE x)
     if (NIL_P(x)) {
         etype = "nil";
     }
-    else if (FIXNUM_P(x)) {
+    else if (WFIXNUM_P(x)) {
         etype = "Integer";
     }
     else if (SYMBOL_P(x)) {
@@ -1376,7 +1376,7 @@ rb_check_type(VALUE x, int t)
          */
         rb_unexpected_object_type(x, builtin_types[t]);
     }
-    xt = TYPE(x);
+    xt = rb_type_legacy(x);
     if (xt != t) {
         unexpected_type(x, xt, t);
     }
@@ -1389,7 +1389,7 @@ rb_unexpected_type(VALUE x, int t)
         rb_bug(UNDEF_LEAKED);
     }
 
-    unexpected_type(x, TYPE(x), t);
+    unexpected_type(x, rb_type_legacy(x), t);
 }
 
 #undef rb_typeddata_inherited_p
@@ -2672,7 +2672,7 @@ name_err_mesg_equal(VALUE obj1, VALUE obj2)
 static VALUE
 name_err_mesg_receiver_name(VALUE obj)
 {
-    if (RB_SPECIAL_CONST_P(obj)) return Qundef;
+    if (WSPECIAL_CONST_P(obj)) return Qundef;
     if (RB_BUILTIN_TYPE(obj) == T_MODULE || RB_BUILTIN_TYPE(obj) == T_CLASS) {
         return rb_check_funcall(obj, rb_intern("name"), 0, 0);
     }
@@ -2723,7 +2723,7 @@ name_err_mesg_to_str(VALUE obj)
                 }
             }
 
-            if (!RB_SPECIAL_CONST_P(obj)) {
+            if (!WSPECIAL_CONST_P(obj)) {
                 switch (RB_BUILTIN_TYPE(obj)) {
                   case T_MODULE:
                     s = FAKE_CSTR(&s_str, "module ");
@@ -3263,7 +3263,7 @@ syserr_initialize(int argc, VALUE *argv, VALUE self)
     if (klass == rb_eSystemCallError) {
         st_data_t data = (st_data_t)klass;
         rb_scan_args(argc, argv, "12", &mesg, &error, &func);
-        if (argc == 1 && FIXNUM_P(mesg)) {
+        if (argc == 1 && WFIXNUM_P(mesg)) {
             error = mesg; mesg = Qnil;
         }
         if (!NIL_P(error) && st_lookup(syserr_tbl, NUM2LONG(error), &data)) {
@@ -3332,7 +3332,7 @@ syserr_eqq(VALUE self, VALUE exc)
         num = rb_funcallv(exc, id_errno, 0, 0);
     }
     e = rb_const_get(self, id_Errno);
-    return RBOOL(FIXNUM_P(num) ? num == e : rb_equal(num, e));
+    return RBOOL(WFIXNUM_P(num) ? num == e : rb_equal(num, e));
 }
 
 

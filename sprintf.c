@@ -556,11 +556,11 @@ rb_str_format(int argc, const VALUE *argv, VALUE fmt)
             {
                 volatile VALUE val = GETARG();
                 int valsign;
-                char nbuf[BIT_DIGITS(SIZEOF_LONG*CHAR_BIT)+2], *s;
+                char nbuf[BIT_DIGITS(SIZEOF_VALUE*CHAR_BIT)+2], *s;
                 const char *prefix = 0;
                 int sign = 0, dots = 0;
                 char sc = 0;
-                long v = 0;
+                SIGNED_VALUE v = 0;
                 int base, bignum = 0;
                 int len;
 
@@ -595,12 +595,12 @@ rb_str_format(int argc, const VALUE *argv, VALUE fmt)
               bin_retry:
                 switch (TYPE(val)) {
                   case T_FLOAT:
-                    if (FIXABLE(RFLOAT_VALUE(val))) {
-                        val = LONG2FIX((long)RFLOAT_VALUE(val));
+                    if (RBIMPL_FIXABLE(RFLOAT_VALUE(val))) {
+                        val = rb_int2inum((SIGNED_VALUE)RFLOAT_VALUE(val));
                         goto bin_retry;
                     }
                     val = rb_dbl2big(RFLOAT_VALUE(val));
-                    if (FIXNUM_P(val)) goto bin_retry;
+                    if (WFIXNUM_P(val)) goto bin_retry;
                     bignum = 1;
                     break;
                   case T_STRING:
@@ -610,7 +610,7 @@ rb_str_format(int argc, const VALUE *argv, VALUE fmt)
                     bignum = 1;
                     break;
                   case T_FIXNUM:
-                    v = FIX2LONG(val);
+                    v = FIX2SV(val);
                     break;
                   default:
                     val = rb_Integer(val);
@@ -703,8 +703,14 @@ rb_str_format(int argc, const VALUE *argv, VALUE fmt)
                         sc = ' ';
                         width--;
                     }
-                    s = ruby_ultoa((unsigned long)v, nbuf + sizeof(nbuf), 10, 0);
-                    len = (int)(nbuf + sizeof(nbuf) - s);
+                    /* ruby_ultoa() takes C's `unsigned long', which is
+                     * narrower than a Fixnum on LLP64 platforms. */
+                    len = RBIMPL_CAST((int)snprintf(
+                            nbuf, sizeof(nbuf), "%" PRI_LL_PREFIX "u",
+                            RBIMPL_CAST((unsigned LONG_LONG)v)));
+                    RBIMPL_ASSERT_OR_ASSUME(len >= 0);
+                    RBIMPL_ASSERT_OR_ASSUME((size_t)len < sizeof(nbuf));
+                    s = nbuf;
                 }
                 else {
                     tmp = rb_big2str(val, 10);
@@ -813,10 +819,12 @@ rb_str_format(int argc, const VALUE *argv, VALUE fmt)
                     goto float_value;
                 }
                 if (!(flags&FPREC)) prec = default_float_precision;
-                if (FIXNUM_P(num)) {
+                if (WFIXNUM_P(num)) {
                     if ((SIGNED_VALUE)num < 0) {
-                        long n = -FIX2LONG(num);
-                        num = LONG2NUM(n);
+                        /* Decode at full width; a Fixnum can exceed C's
+                         * `long' on LLP64 platforms. */
+                        SIGNED_VALUE n = -FIX2SV(num);
+                        num = rb_int2inum(n);
                         sign = -1;
                     }
                 }

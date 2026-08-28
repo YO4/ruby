@@ -799,7 +799,7 @@ ractor_init(rb_ractor_t *r, VALUE name, VALUE loc)
         name = RB_OBJ_SET_SHAREABLE(rb_str_new_frozen(name));
     }
 
-    if (!SPECIAL_CONST_P(loc)) RB_OBJ_SET_SHAREABLE(loc);
+    if (!WSPECIAL_CONST_P(loc)) RB_OBJ_SET_SHAREABLE(loc);
     r->loc = loc;
     r->name = name;
 }
@@ -1523,7 +1523,7 @@ rb_ractor_verify_shareable(VALUE obj)
 VALUE
 rb_obj_set_shareable(VALUE obj)
 {
-    RUBY_ASSERT(!RB_SPECIAL_CONST_P(obj));
+    RUBY_ASSERT(!WSPECIAL_CONST_P(obj));
 
     rb_obj_set_shareable_no_assert(obj);
     RUBY_ASSERT(rb_ractor_verify_shareable(obj));
@@ -1634,7 +1634,7 @@ obj_traverse_ivar_foreach_i(ID key, VALUE val, st_data_t ptr)
 static int
 obj_traverse_i(VALUE obj, struct obj_traverse_data *data)
 {
-    if (RB_SPECIAL_CONST_P(obj)) return 0;
+    if (WSPECIAL_CONST_P(obj)) return 0;
 
     switch (data->enter_func(obj)) {
       case traverse_cont: break;
@@ -1860,7 +1860,7 @@ static int obj_refer_only_shareables_p(VALUE obj);
 static enum obj_traverse_iterator_result
 make_shareable_check_shareable(VALUE obj)
 {
-    VM_ASSERT(!SPECIAL_CONST_P(obj));
+    VM_ASSERT(!WSPECIAL_CONST_P(obj));
 
     if (rb_ractor_shareable_p(obj)) {
         return traverse_skip;
@@ -2137,7 +2137,7 @@ obj_traverse_replace_i(VALUE obj, struct obj_traverse_replace_data *data)
 {
     st_data_t replacement;
 
-    if (RB_SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
         data->replacement = obj;
         return 0;
     }
@@ -2158,7 +2158,7 @@ obj_traverse_replace_i(VALUE obj, struct obj_traverse_replace_data *data)
 
     replacement = (st_data_t)data->replacement;
     st_insert(obj_traverse_replace_rec(data), (st_data_t)obj, replacement);
-    if (!RB_SPECIAL_CONST_P((VALUE)replacement)) {
+    if (!WSPECIAL_CONST_P((VALUE)replacement)) {
         rb_ary_push(data->rec_keepalive, (VALUE)replacement);
     }
 
@@ -2598,7 +2598,7 @@ move_capture(struct move_build *b, VALUE obj)
     uint32_t id = move_alloc_node(b->c);
     st_insert(b->seen, (st_data_t)obj, (st_data_t)(uintptr_t)(id + 1));
 
-    if (RB_SPECIAL_CONST_P(obj) || rb_ractor_shareable_p(obj)) {
+    if (WSPECIAL_CONST_P(obj) || rb_ractor_shareable_p(obj)) {
         b->c->nodes[id].kind = MOVE_KIND_REF;
         b->c->nodes[id].frozen = false;
         b->c->nodes[id].niv = 0;
@@ -2790,7 +2790,7 @@ move_preflight_hash_i(st_data_t key, st_data_t val, st_data_t arg)
 static void
 move_preflight(VALUE obj, st_table *seen)
 {
-    if (RB_SPECIAL_CONST_P(obj) || rb_ractor_shareable_p(obj)) return;
+    if (WSPECIAL_CONST_P(obj) || rb_ractor_shareable_p(obj)) return;
     if (st_lookup(seen, (st_data_t)obj, NULL)) return;   /* cycle */
     st_insert(seen, (st_data_t)obj, 0);
 
@@ -3031,7 +3031,7 @@ rb_ractor_move_courier_materialize(struct rb_ractor_move_courier *c)
     /* Freeze after filling, so frozen containers and strings can be built too. */
     for (uint32_t i = 0; i < c->count; i++) {
         VALUE shell = RARRAY_AREF(shells, i);
-        if (c->nodes[i].frozen && !RB_SPECIAL_CONST_P(shell)) {
+        if (c->nodes[i].frozen && !WSPECIAL_CONST_P(shell)) {
             rb_obj_freeze(shell);
         }
     }

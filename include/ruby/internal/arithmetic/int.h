@@ -134,16 +134,11 @@ RB_FIX2INT(VALUE x)
 #if 0
     RBIMPL_ASSERT_OR_ASSUME(RB_FIXNUM_P(x));
 #endif
-    long ret;
-
-    if /* constexpr */ (sizeof(int) < sizeof(long)) {
-        ret = rb_fix2int(x);
-    }
-    else {
-        ret = RB_FIX2LONG(x);
-    }
-
-    return RBIMPL_CAST((int)ret);
+    /* Always go through the checking function: a Fixnum can be wider than
+     * C's `int' (and even than `long' inside the interpreter), and legacy
+     * extension code must see the same RangeError it saw when such values
+     * were Bignums. */
+    return RBIMPL_CAST((int)rb_fix2int(x));
 }
 
 /**
@@ -157,19 +152,8 @@ RB_FIX2INT(VALUE x)
 static inline int
 rb_num2int_inline(VALUE x)
 {
-    long ret;
-
-    if /* constexpr */ (sizeof(int) == sizeof(long)) {
-        ret = RB_NUM2LONG(x);
-    }
-    else if (RB_FIXNUM_P(x)) {
-        ret = rb_fix2int(x);
-    }
-    else {
-        ret = rb_num2int(x);
-    }
-
-    return RBIMPL_CAST((int)ret);
+    /* Route through the checking function; see RB_FIX2INT(). */
+    return RBIMPL_CAST((int)rb_num2int(x));
 }
 
 /**
@@ -184,16 +168,8 @@ RBIMPL_ATTR_ARTIFICIAL()
 static inline unsigned int
 RB_NUM2UINT(VALUE x)
 {
-    unsigned long ret;
-
-    if /* constexpr */ (sizeof(int) < sizeof(long)) {
-        ret = rb_num2uint(x);
-    }
-    else {
-        ret = RB_NUM2ULONG(x);
-    }
-
-    return RBIMPL_CAST((unsigned int)ret);
+    /* Always go through the checking function; see RB_FIX2INT(). */
+    return RBIMPL_CAST((unsigned int)rb_num2uint(x));
 }
 
 RBIMPL_ATTR_ARTIFICIAL()
@@ -210,16 +186,9 @@ RB_FIX2UINT(VALUE x)
 #if 0 /* Ditto for RB_FIX2INT. */
     RBIMPL_ASSERT_OR_ASSUME(RB_FIXNUM_P(x));
 #endif
-    unsigned long ret;
-
-    if /* constexpr */ (sizeof(int) < sizeof(long)) {
-        ret = rb_fix2uint(x);
-    }
-    else {
-        ret = RB_FIX2ULONG(x);
-    }
-
-    return RBIMPL_CAST((unsigned int)ret);
+    /* See RB_FIX2INT(): route through the checking function so that values a
+     * legacy extension perceives as Bignums keep raising RangeError. */
+    return RBIMPL_CAST((unsigned int)rb_fix2uint(x));
 }
 
 RBIMPL_WARNING_PUSH()
@@ -258,7 +227,6 @@ rb_uint2num_inline(unsigned int v)
     else
         return rb_uint2big(v);
 }
-
 RBIMPL_WARNING_POP()
 
 #endif /* RBIMPL_ARITHMETIC_INT_H */

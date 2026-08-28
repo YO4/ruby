@@ -512,7 +512,7 @@ rb_vm_instruction_size(void)
 static int
 yjit_cdhash_all_fixnum_i(st_data_t key, st_data_t _val, st_data_t data)
 {
-    if (!FIXNUM_P((VALUE)key)) {
+    if (!WFIXNUM_P((VALUE)key)) {
         *((bool *)data) = false;
         return ST_STOP;
     }

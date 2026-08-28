@@ -507,7 +507,7 @@ exiting_split(VALUE errinfo, volatile int *exitcode, volatile int *sigstatus)
             result |= EXITING_WITH_MESSAGE;
     }
     else if (rb_obj_is_kind_of(errinfo, rb_eSystemCallError) &&
-        FIXNUM_P(signo = rb_attr_get(errinfo, id_signo))) {
+        WFIXNUM_P(signo = rb_attr_get(errinfo, id_signo))) {
         sig = FIX2INT(signo);
         result |= EXITING_WITH_SIGNAL;
         /* no message when exiting by error to be mapped to signal */

@@ -2478,7 +2478,7 @@ static VALUE
 lazy_take_size(VALUE entry, VALUE receiver)
 {
     long len = NUM2LONG(RARRAY_AREF(rb_ivar_get(entry, id_arguments), 0));
-    if (NIL_P(receiver) || (FIXNUM_P(receiver) && FIX2LONG(receiver) < len))
+    if (NIL_P(receiver) || (WFIXNUM_P(receiver) && FIX2SV(receiver) < len))
         return receiver;
     return LONG2NUM(len);
 }
@@ -2550,8 +2550,8 @@ lazy_drop_size(VALUE proc_entry, VALUE receiver)
     long len = NUM2LONG(RARRAY_AREF(rb_ivar_get(proc_entry, id_arguments), 0));
     if (NIL_P(receiver))
         return receiver;
-    if (FIXNUM_P(receiver)) {
-        len = FIX2LONG(receiver) - len;
+    if (WFIXNUM_P(receiver)) {
+        len = FIX2SV(receiver) - len;
         return LONG2FIX(len < 0 ? 0 : len);
     }
     return rb_funcall(receiver, '-', 1, LONG2NUM(len));
@@ -4052,9 +4052,9 @@ arith_seq_take(VALUE self, VALUE num)
     if (FIXNUM_P(b) && NIL_P(e) && FIXNUM_P(s)) {
         long i = FIX2LONG(b), unit = FIX2LONG(s);
         ary = rb_ary_new_capa(n);
-        while (n > 0 && FIXABLE(i)) {
+        while (n > 0 && RBIMPL_FIXABLE(i)) {
             rb_ary_push(ary, LONG2FIX(i));
-            i += unit;  // FIXABLE + FIXABLE never overflow;
+            i += unit;  // RBIMPL_FIXABLE + RBIMPL_FIXABLE never overflow;
             --n;
         }
         if (n > 0) {
@@ -4536,7 +4536,7 @@ arith_seq_size(VALUE self)
 
         n = ruby_float_step_size(NUM2DBL(b), ee, NUM2DBL(s), x);
         if (isinf(n)) return DBL2NUM(n);
-        if (POSFIXABLE(n)) return LONG2FIX((long)n);
+        if (RBIMPL_POSFIXABLE(n)) return rb_int2inum((SIGNED_VALUE)n);
         return rb_dbl2big(n);
     }
 

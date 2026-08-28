@@ -1321,10 +1321,16 @@ range_values(VALUE vmax, VALUE *begp, VALUE *endp, int *exclp)
 }
 
 static VALUE
-rand_int(VALUE obj, const rb_random_interface_t *rng, rb_random_t *rnd, VALUE vmax, int restrictive)
+rand_int(VALUE obj, const rb_random_interface_t *rng, rb_random_t *rnd, VALUE vmax0, int restrictive)
 {
     /* mt must be initialized */
     unsigned long r;
+    VALUE vmax = vmax0;
+
+    /* A Fixnum wider than C's `long' takes the Bignum path below. */
+    if (WFIXNUM_P(vmax) && !FIXNUM_P(vmax)) {
+        vmax = rb_int2big(RBIMPL_FIXNUM_VALUE(vmax));
+    }
 
     if (FIXNUM_P(vmax)) {
         long max = FIX2LONG(vmax);
@@ -1344,11 +1350,11 @@ rand_int(VALUE obj, const rb_random_interface_t *rng, rb_random_t *rnd, VALUE vm
             vmax = rb_big_uminus(vmax);
         }
         vmax = rb_big_minus(vmax, INT2FIX(1));
-        if (FIXNUM_P(vmax)) {
-            long max = FIX2LONG(vmax);
-            if (max == -1) return Qnil;
-            r = random_ulong_limited(obj, rng, rnd, max);
-            return LONG2NUM(r);
+        /* Keep this branch purely on the pre-wide-Fixnum code path: anything
+         * above legacy range must stay a heap Bignum here, matching the
+         * behaviour extensions and tests have seen historically. */
+        if (WFIXNUM_P(vmax)) {
+            vmax = rb_int2big(FIX2SV(vmax));
         }
         ret = random_ulong_limited_big(obj, rng, rnd, vmax);
         RB_GC_GUARD(vmax);
@@ -1403,23 +1409,37 @@ rand_range(VALUE obj, const rb_random_interface_t *rng, rb_random_t* rnd, VALUE 
         return Qfalse;
     if (NIL_P(v)) domain_error();
     if (!RB_FLOAT_TYPE_P(vmax) && (v = rb_check_to_int(vmax), !NIL_P(v))) {
-        long max;
         vmax = v;
         v = Qnil;
       fixnum:
+        /* Apply exclusive-range adjustment once, up front. */
+        if (excl && RB_INTEGER_TYPE_P(vmax)) {
+            vmax = rb_int_minus(vmax, INT2FIX(1));
+            excl = 0;
+        }
+        /* Only a legacy-sized Fixnum may take the C `long' fast path; wide
+         * immediates must use the Bignum path just like they did when such
+         * values were heap-allocated Bignums. */
         if (FIXNUM_P(vmax)) {
-            if ((max = FIX2LONG(vmax) - excl) >= 0) {
-                unsigned long r = random_ulong_limited(obj, rng, rnd, (unsigned long)max);
+            long m2 = FIX2LONG(vmax);
+            if (m2 >= 0) {
+                unsigned long r = random_ulong_limited(obj, rng, rnd,
+                        (unsigned long)m2);
                 v = ULONG2NUM(r);
             }
         }
-        else if (BUILTIN_TYPE(vmax) == T_BIGNUM && BIGNUM_SIGN(vmax) && !rb_bigzero_p(vmax)) {
-            vmax = excl ? rb_big_minus(vmax, INT2FIX(1)) : rb_big_norm(vmax);
-            if (FIXNUM_P(vmax)) {
-                excl = 0;
-                goto fixnum;
+        else if (RB_INTEGER_TYPE_P(vmax)) {
+            /* A wide immediate must become a heap Bignum before any
+             * BIGNUM_*() flag access. */
+            if (!RB_BIGNUM_TYPE_P(vmax)) {
+                vmax = rb_int2big(RBIMPL_FIXNUM_VALUE(vmax));
             }
-            v = random_ulong_limited_big(obj, rng, rnd, vmax);
+            if (!BIGNUM_SIGN(vmax) || rb_bigzero_p(vmax)) {
+                v = Qnil;
+            }
+            else {
+                v = random_ulong_limited_big(obj, rng, rnd, vmax);
+            }
         }
     }
     else if (v = rb_check_to_float(vmax), !NIL_P(v)) {
@@ -1448,9 +1468,9 @@ rand_range(VALUE obj, const rb_random_interface_t *rng, rb_random_t* rnd, VALUE 
         }
     }
 
-    if (FIXNUM_P(beg) && FIXNUM_P(v)) {
-        long x = FIX2LONG(beg) + FIX2LONG(v);
-        return LONG2NUM(x);
+    if (WFIXNUM_P(beg) && WFIXNUM_P(v)) {
+        SIGNED_VALUE x = FIX2SV(beg) + FIX2SV(v);
+        return rb_int2inum(x);
     }
     switch (TYPE(v)) {
       case T_NIL:

@@ -106,13 +106,13 @@
 #if __has_builtin(__builtin_mul_overflow_p)
 /* __builtin_mul_overflow_p can take bitfield */
 /* and GCC permits bitfields for integers other than int */
-# define MUL_OVERFLOW_FIXNUM_P(a, b) \
+# define MUL_OVERFLOW_WFIXNUM_P(a, b) \
     __extension__ ({ \
         struct { long fixnum : sizeof(long) * CHAR_BIT - 1; } c = { 0 }; \
         __builtin_mul_overflow_p((a), (b), c.fixnum); \
     })
 #else
-# define MUL_OVERFLOW_FIXNUM_P(a, b) \
+# define MUL_OVERFLOW_WFIXNUM_P(a, b) \
     MUL_OVERFLOW_SIGNED_INTEGER_P(a, b, FIXNUM_MIN, FIXNUM_MAX)
 #endif
 
@@ -146,13 +146,13 @@
 #if __has_builtin(__builtin_add_overflow_p)
 /* __builtin_add_overflow_p can take bitfield */
 /* and GCC permits bitfields for integers other than int */
-# define ADD_OVERFLOW_FIXNUM_P(a, b) \
+# define ADD_OVERFLOW_WFIXNUM_P(a, b) \
     __extension__ ({ \
         struct { long fixnum : sizeof(long) * CHAR_BIT - 1; } c = { 0 }; \
         __builtin_add_overflow_p((a), (b), c.fixnum); \
     })
 #else
-# define ADD_OVERFLOW_FIXNUM_P(a, b) \
+# define ADD_OVERFLOW_WFIXNUM_P(a, b) \
     ADD_OVERFLOW_SIGNED_INTEGER_P(a, b, FIXNUM_MIN, FIXNUM_MAX)
 #endif
 
@@ -186,13 +186,13 @@
 #if __has_builtin(__builtin_sub_overflow_p)
 /* __builtin_sub_overflow_p can take bitfield */
 /* and GCC permits bitfields for integers other than int */
-# define SUB_OVERFLOW_FIXNUM_P(a, b) \
+# define SUB_OVERFLOW_WFIXNUM_P(a, b) \
     __extension__ ({ \
         struct { long fixnum : sizeof(long) * CHAR_BIT - 1; } c = { 0 }; \
         __builtin_sub_overflow_p((a), (b), c.fixnum); \
     })
 #else
-# define SUB_OVERFLOW_FIXNUM_P(a, b) \
+# define SUB_OVERFLOW_WFIXNUM_P(a, b) \
     SUB_OVERFLOW_SIGNED_INTEGER_P(a, b, FIXNUM_MIN, FIXNUM_MAX)
 #endif
 

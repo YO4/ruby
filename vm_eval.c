@@ -454,7 +454,7 @@ gccct_method_search(rb_execution_context_t *ec, VALUE recv, ID mid, const struct
     VALUE klass, box_value;
     const rb_box_t *box = rb_current_box();
 
-    if (!SPECIAL_CONST_P(recv)) {
+    if (!WSPECIAL_CONST_P(recv)) {
         klass = RBASIC_CLASS(recv);
         if (UNLIKELY(!klass)) uncallable_object(recv, mid);
     }
@@ -795,7 +795,7 @@ uncallable_object(VALUE recv, ID mid)
     const char *typestr;
     VALUE mname = rb_id2str(mid);
 
-    if (SPECIAL_CONST_P(recv)) {
+    if (WSPECIAL_CONST_P(recv)) {
         rb_raise(rb_eNotImpError,
                  "method '%"PRIsVALUE"' called on unexpected immediate object (%p)",
                  mname, (void *)recv);

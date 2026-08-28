@@ -706,7 +706,7 @@ has_ivars(VALUE obj, VALUE encname, VALUE *ivobj)
 {
     st_index_t num = !NIL_P(encname);
 
-    if (SPECIAL_CONST_P(obj)) goto generic;
+    if (WSPECIAL_CONST_P(obj)) goto generic;
     switch (BUILTIN_TYPE(obj)) {
       case T_OBJECT:
       case T_CLASS:
@@ -759,18 +759,17 @@ w_objivar(VALUE obj, struct dump_call_arg *arg)
     w_ivar_each(obj, num, arg);
 }
 
-#if SIZEOF_LONG > 4
-// Optimized dump for fixnum larger than 31-bits
+// Optimized dump for fixnum larger than the wire format's `long'
 static void
 w_bigfixnum(VALUE obj, struct dump_arg *arg)
 {
-    RUBY_ASSERT(FIXNUM_P(obj));
+    RUBY_ASSERT(WFIXNUM_P(obj));
 
     w_byte(TYPE_BIGNUM, arg);
 
 #if SIZEOF_LONG == SIZEOF_VALUE
     long num, slen_num;
-    num = FIX2LONG(obj);
+    num = FIX2SV(obj);
 #else
     long long num, slen_num;
     num = NUM2LL(obj);
@@ -792,7 +791,7 @@ w_bigfixnum(VALUE obj, struct dump_arg *arg)
         }
     }
 
-    RUBY_ASSERT(slen > 0 && slen <= SIZEOF_LONG / 2);
+    RUBY_ASSERT(slen > 0 && slen <= SIZEOF_LONG_LONG / 2);
 
     w_long((long)slen, arg);
 
@@ -807,7 +806,6 @@ w_bigfixnum(VALUE obj, struct dump_arg *arg)
 
     RUBY_ASSERT(num == 0);
 }
-#endif
 
 static void
 w_remember(VALUE obj, struct dump_arg *arg)
@@ -837,19 +835,17 @@ w_object(VALUE obj, struct dump_arg *arg, int limit)
     else if (obj == Qfalse) {
         w_byte(TYPE_FALSE, arg);
     }
-    else if (FIXNUM_P(obj)) {
-#if SIZEOF_LONG <= 4
-        w_byte(TYPE_FIXNUM, arg);
-        w_long(FIX2INT(obj), arg);
-#else
-        if (RSHIFT((long)obj, 31) == 0 || RSHIFT((long)obj, 31) == -1) {
+    else if (WFIXNUM_P(obj)) {
+        /* The range test must run at VALUE width; on LLP64 C's `long' (and
+         * therefore the wire format's "long") is narrower than a Fixnum. */
+        const SIGNED_VALUE l = FIX2SV(obj);
+        if (RSHIFT(l, 31) == 0 || RSHIFT(l, 31) == -1) {
             w_byte(TYPE_FIXNUM, arg);
-            w_long(FIX2LONG(obj), arg);
+            w_long((long)l, arg);
         }
         else {
             w_bigfixnum(obj, arg);
         }
-#endif
     }
     else if (SYMBOL_P(obj)) {
         w_symbol(obj, arg);
@@ -1191,7 +1187,7 @@ marshal_dump(int argc, VALUE *argv, VALUE _)
         port = a1;
     }
     else if (argc == 2) {
-        if (FIXNUM_P(a1)) limit = FIX2INT(a1);
+        if (WFIXNUM_P(a1)) limit = FIX2INT(a1);
         else if (NIL_P(a1)) io_needed();
         else port = a1;
     }
@@ -1954,7 +1950,7 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE klass, VALUE ex
                 goto type_hash;
             }
             v = r_object_for(arg, partial, 0, c, extmod, type);
-            if (RB_SPECIAL_CONST_P(v) || RB_TYPE_P(v, T_OBJECT) || RB_TYPE_P(v, T_CLASS)) {
+            if (WSPECIAL_CONST_P(v) || RB_TYPE_P(v, T_OBJECT) || RB_TYPE_P(v, T_CLASS)) {
                 goto format_error;
             }
             if (RB_TYPE_P(v, T_MODULE) || !RTEST(rb_class_inherited_p(c, RBASIC(v)->klass))) {

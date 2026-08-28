@@ -250,7 +250,7 @@ rb_ractor_shareable_p(VALUE obj)
 {
     bool rb_ractor_shareable_p_continue(VALUE obj);
 
-    if (RB_SPECIAL_CONST_P(obj)) {
+    if (rbimm_special_const_p(obj)) {
         return true;
     }
     else if (RB_OBJ_SHAREABLE_P(obj)) {

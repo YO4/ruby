@@ -217,8 +217,8 @@ static unsigned long
 iter_lev_in_ivar(VALUE set)
 {
     VALUE levval = rb_ivar_get(set, id_set_iter_lev);
-    SET_ASSERT(FIXNUM_P(levval));
-    long lev = FIX2LONG(levval);
+    SET_ASSERT(WFIXNUM_P(levval));
+    long lev = FIX2SV(levval);
     SET_ASSERT(lev >= 0);
     return (unsigned long)lev;
 }

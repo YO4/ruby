@@ -342,7 +342,7 @@ vm_cref_new0(VALUE klass, rb_method_visibility_t visi, int module_func, rb_cref_
      * self, `using`'s refinements hash) go through the write barrier to record a shref;
      * a plain store would let the owner's local GC collect the child under the pinned
      * cref.  next is always a cref (shareable): plain store. */
-    if (!SPECIAL_CONST_P(refinements)) RB_OBJ_WRITTEN(cref, Qundef, refinements);
+    if (!WSPECIAL_CONST_P(refinements)) RB_OBJ_WRITTEN(cref, Qundef, refinements);
     if (klass) {
         RB_OBJ_WRITE(cref, &cref->klass_or_self, klass);
     }
@@ -1689,7 +1689,7 @@ rb_vm_make_proc_lambda(const rb_execution_context_t *ec, const struct rb_capture
                 ifunc->svar_lep = (VALUE *)env->ep;
             }
             else {
-                VM_ASSERT(FIXNUM_P(ep0));
+                VM_ASSERT(WFIXNUM_P(ep0));
                 if (ep0 & VM_ENV_FLAG_ESCAPED) {
                     // ok. do nothing
                 }
@@ -3420,7 +3420,7 @@ rb_vm_each_stack_value(void *ptr, void (*cb)(VALUE, void*), void *ctx)
                         VALUE *p = ec->vm_stack;
                         VALUE *sp = ec->cfp->sp;
                         while (p < sp) {
-                            if (!RB_SPECIAL_CONST_P(*p)) {
+                            if (!WSPECIAL_CONST_P(*p)) {
                                 cb(*p, ctx);
                             }
                             p++;
@@ -3911,7 +3911,7 @@ rb_execution_context_mark(const rb_execution_context_t *ec)
      * couriers are covered by the in-flight registry instead (ractor.c). */
     for (const struct ractor_materialize_frame *f = ec->materialize_frames; f != NULL; f = f->prev) {
         rb_gc_mark(f->snapshot);
-        if (f->snapshot && !RB_SPECIAL_CONST_P(f->snapshot) && rb_gc_during_global_gc_p()) {
+        if (f->snapshot && !WSPECIAL_CONST_P(f->snapshot) && rb_gc_during_global_gc_p()) {
             /* Every node, not just the root: if compaction moved a snapshot node,
              * the address-keyed generic_fields entries and the dedup table would
              * break. */
@@ -4872,8 +4872,8 @@ ruby_init_stack(void *addr)
 void
 rb_vm_register_global_object(VALUE obj)
 {
-    RUBY_ASSERT(!RB_SPECIAL_CONST_P(obj));
-    if (RB_SPECIAL_CONST_P(obj)) {
+    RUBY_ASSERT(!WSPECIAL_CONST_P(obj));
+    if (WSPECIAL_CONST_P(obj)) {
         return;
     }
 

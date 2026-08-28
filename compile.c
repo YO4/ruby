@@ -383,7 +383,7 @@ append_compile_error(const rb_iseq_t *iseq, int line, const char *fmt, ...)
         RB_OBJ_WRITE(iseq, &ISEQ_COMPILE_DATA(iseq)->err_info, Qtrue);
     }
     if (compile_debug) {
-        if (SPECIAL_CONST_P(err)) err = rb_eSyntaxError;
+        if (WSPECIAL_CONST_P(err)) err = rb_eSyntaxError;
         rb_exc_fatal(err);
     }
 }
@@ -691,7 +691,7 @@ add_trace_branch_coverage(rb_iseq_t *iseq, LINK_ANCHOR *const seq, const rb_code
         rb_ary_push(counters, INT2FIX(0));
     }
     else {
-        counter_idx = FIX2LONG(RARRAY_AREF(branch, 5));
+        counter_idx = FIX2SV(RARRAY_AREF(branch, 5));
     }
 
     ADD_TRACE_WITH_DATA(seq, RUBY_EVENT_COVERAGE_BRANCH, counter_idx);
@@ -1382,7 +1382,7 @@ static void
 iseq_insn_each_object_write_barrier(VALUE * obj, VALUE iseq)
 {
     RB_OBJ_WRITTEN(iseq, Qundef, *obj);
-    RUBY_ASSERT(SPECIAL_CONST_P(*obj) ||
+    RUBY_ASSERT(WSPECIAL_CONST_P(*obj) ||
                 RBASIC_CLASS(*obj) == 0 || // hidden
                 RB_OBJ_SHAREABLE_P(*obj));
 }
@@ -2060,7 +2060,7 @@ iseq_set_arguments_keywords(rb_iseq_t *iseq, LINK_ANCHOR *const optargs,
         for (i = 0; i < RARRAY_LEN(default_values); i++) {
             VALUE dv = RARRAY_AREF(default_values, i);
             if (dv == complex_mark) dv = Qundef;
-            if (!SPECIAL_CONST_P(dv)) rb_ractor_make_shareable(dv);
+            if (!WSPECIAL_CONST_P(dv)) rb_ractor_make_shareable(dv);
             RB_OBJ_WRITE(iseq, &dvs[i], dv);
         }
 
@@ -2295,7 +2295,7 @@ rb_iseq_cdhash_cmp(VALUE val, VALUE lit)
         return rb_str_hash_cmp(lit, val);
     }
     else if (tlit == T_BIGNUM) {
-        long x = FIX2LONG(rb_big_cmp(lit, val));
+        long x = FIX2SV(rb_big_cmp(lit, val));
 
         /* Given lit and val are both Bignum, x must be -1, 0, 1.
          * There is no need to call rb_fix2int here. */
@@ -2333,7 +2333,7 @@ rb_iseq_cdhash_hash(VALUE a)
       case T_STRING:
         return rb_str_hash(a);
       case T_BIGNUM:
-        return FIX2LONG(rb_big_hash(a));
+        return FIX2SV(rb_big_hash(a));
       case T_FLOAT:
         return rb_dbl_long_hash(RFLOAT_VALUE(a));
       case T_RATIONAL:
@@ -2804,7 +2804,7 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
                             VALUE v = operands[j];
                             generated_iseq[code_index + 1 + j] = v;
                             /* to mark ruby object */
-                            if (!SPECIAL_CONST_P(v)) {
+                            if (!WSPECIAL_CONST_P(v)) {
                                 RB_OBJ_WRITTEN(iseq, Qundef, v);
                                 ISEQ_MBITS_SET(mark_offset_bits, code_index + 1 + j);
                                 needs_bitmap = true;
@@ -3907,7 +3907,7 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
                 }
             }
             else {
-                long diff = FIX2LONG(op1) - FIX2LONG(op2);
+                long diff = FIX2SV(op1) - FIX2SV(op2);
                 INSN_OF(iobj) = BIN(opt_reverse);
                 OPERAND_AT(iobj, 0) = OPERAND_AT(next, 0);
 
@@ -3987,7 +3987,7 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
             INSN *next = (INSN *)iobj->link.next;
             if (OPERAND_AT(next, 1) == INT2FIX(1)) {
                 VALUE src = OPERAND_AT(iobj, 0);
-                int opt = (int)FIX2LONG(OPERAND_AT(next, 0));
+                int opt = (int)FIX2SV(OPERAND_AT(next, 0));
                 VALUE path = rb_iseq_path(iseq);
                 int line = iobj->insn_info.line_no;
                 VALUE re = iseq_reg_compile(iseq, src, opt, RSTRING_PTR(path), line);
@@ -5185,13 +5185,13 @@ static_literal_value(const NODE *node, rb_iseq_t *iseq)
       case NODE_INTEGER:
         {
             VALUE lit = rb_node_integer_literal_val(node);
-            if (!SPECIAL_CONST_P(lit)) RB_OBJ_SET_SHAREABLE(lit);
+            if (!WSPECIAL_CONST_P(lit)) RB_OBJ_SET_SHAREABLE(lit);
             return lit;
         }
       case NODE_FLOAT:
         {
             VALUE lit = rb_node_float_literal_val(node);
-            if (!SPECIAL_CONST_P(lit)) RB_OBJ_SET_SHAREABLE(lit);
+            if (!WSPECIAL_CONST_P(lit)) RB_OBJ_SET_SHAREABLE(lit);
             return lit;
         }
       case NODE_RATIONAL:
@@ -5455,9 +5455,9 @@ compile_hash(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int meth
                 for (; count; count--, node = RNODE_LIST(RNODE_LIST(node)->nd_next)->nd_next) {
                     VALUE elem[2];
                     elem[0] = static_literal_value(RNODE_LIST(node)->nd_head, iseq);
-                    if (!RB_SPECIAL_CONST_P(elem[0])) RB_OBJ_SET_FROZEN_SHAREABLE(elem[0]);
+                    if (!WSPECIAL_CONST_P(elem[0])) RB_OBJ_SET_FROZEN_SHAREABLE(elem[0]);
                     elem[1] = static_literal_value(RNODE_LIST(RNODE_LIST(node)->nd_next)->nd_head, iseq);
-                    if (!RB_SPECIAL_CONST_P(elem[1])) RB_OBJ_SET_FROZEN_SHAREABLE(elem[1]);
+                    if (!WSPECIAL_CONST_P(elem[1])) RB_OBJ_SET_FROZEN_SHAREABLE(elem[1]);
                     rb_ary_cat(ary, elem, 2);
                 }
                 VALUE hash = rb_hash_alloc_fixed_size(Qfalse, RARRAY_LEN(ary) / 2);
@@ -5576,7 +5576,7 @@ rb_node_case_when_optimizable_literal(const NODE *const node)
         double ival;
 
         if (modf(RFLOAT_VALUE(v), &ival) == 0.0) {
-            return FIXABLE(ival) ? LONG2FIX((long)ival) : rb_dbl2big(ival);
+            return RBIMPL_FIXABLE(ival) ? rb_int2inum((SIGNED_VALUE)ival) : rb_dbl2big(ival);
         }
         return v;
       }
@@ -11292,7 +11292,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
       }
       case NODE_INTEGER:{
         VALUE lit = rb_node_integer_literal_val(node);
-        if (!SPECIAL_CONST_P(lit)) RB_OBJ_SET_SHAREABLE(lit);
+        if (!WSPECIAL_CONST_P(lit)) RB_OBJ_SET_SHAREABLE(lit);
         debugp_param("integer", lit);
         if (!popped) {
             ADD_INSN1(ret, node, putobject, lit);
@@ -11302,7 +11302,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
       }
       case NODE_FLOAT:{
         VALUE lit = rb_node_float_literal_val(node);
-        if (!SPECIAL_CONST_P(lit)) RB_OBJ_SET_SHAREABLE(lit);
+        if (!WSPECIAL_CONST_P(lit)) RB_OBJ_SET_SHAREABLE(lit);
         debugp_param("float", lit);
         if (!popped) {
             ADD_INSN1(ret, node, putobject, lit);
@@ -11745,7 +11745,7 @@ calc_sp_depth(int depth, INSN *insn)
 static VALUE
 opobj_inspect(VALUE obj)
 {
-    if (!SPECIAL_CONST_P(obj) && !RBASIC_CLASS(obj)) {
+    if (!WSPECIAL_CONST_P(obj) && !RBASIC_CLASS(obj)) {
         switch (BUILTIN_TYPE(obj)) {
           case T_STRING:
             obj = rb_str_resurrect(obj);
@@ -12147,7 +12147,7 @@ iseq_build_from_ary_body(rb_iseq_t *iseq, LINK_ANCHOR *const anchor,
                 ADD_LABEL(anchor, label);
             }
         }
-        else if (FIXNUM_P(obj)) {
+        else if (WFIXNUM_P(obj)) {
             line_no = NUM2INT(obj);
         }
         else if (RB_TYPE_P(obj, T_ARRAY)) {
@@ -12312,7 +12312,7 @@ static int
 int_param(int *dst, VALUE param, VALUE sym)
 {
     VALUE val = rb_hash_aref(param, sym);
-    if (FIXNUM_P(val)) {
+    if (WFIXNUM_P(val)) {
         *dst = FIX2INT(val);
         return TRUE;
     }
@@ -12462,7 +12462,7 @@ rb_iseq_build_from_ary(rb_iseq_t *iseq, VALUE misc, VALUE locals, VALUE params,
             tbl[i] = 0;
         }
         else {
-            tbl[i] = FIXNUM_P(lv) ? (ID)FIX2LONG(lv) : SYM2ID(CHECK_SYMBOL(lv));
+            tbl[i] = WFIXNUM_P(lv) ? (ID)FIX2SV(lv) : SYM2ID(CHECK_SYMBOL(lv));
         }
     }
 
@@ -13143,7 +13143,7 @@ ibf_load_code(const struct ibf_load *load, rb_iseq_t *iseq, ibf_offset_t bytecod
                     VALUE op = ibf_load_small_value(load, &reading_pos);
                     VALUE v = ibf_load_object(load, op);
                     code[code_index] = v;
-                    if (!SPECIAL_CONST_P(v)) {
+                    if (!WSPECIAL_CONST_P(v)) {
                         RB_OBJ_WRITTEN(iseqv, Qundef, v);
                         ISEQ_MBITS_SET(mark_offset_bits, code_index);
                         needs_bitmap = true;
@@ -13171,7 +13171,7 @@ ibf_load_code(const struct ibf_load *load, rb_iseq_t *iseq, ibf_offset_t bytecod
                     VALUE op = (VALUE)ibf_load_small_value(load, &reading_pos);
                     VALUE v = (VALUE)ibf_load_iseq(load, (const rb_iseq_t *)op);
                     code[code_index] = v;
-                    if (!SPECIAL_CONST_P(v)) {
+                    if (!WSPECIAL_CONST_P(v)) {
                         RB_OBJ_WRITTEN(iseqv, Qundef, v);
                         ISEQ_MBITS_SET(mark_offset_bits, code_index);
                         needs_bitmap = true;
@@ -14554,6 +14554,8 @@ ibf_load_object_bignum(const struct ibf_load *load, const struct ibf_object_head
     VALUE obj = rb_integer_unpack(bignum->digits, len, sizeof(BDIGIT), 0,
                                   big_unpack_flags |
                                   (sign == 0 ? INTEGER_PACK_NEGATIVE : 0));
+    /* The value may have been normalized into a wide immediate. */
+    if (WSPECIAL_CONST_P(obj)) return obj;
     if (header->internal) rb_obj_hide(obj);
     if (header->frozen)   RB_OBJ_SET_FROZEN_SHAREABLE(obj);
     return obj;
@@ -14717,7 +14719,7 @@ ibf_dump_object_object(struct ibf_dump *dump, VALUE obj)
     IBF_W_ALIGN(ibf_offset_t);
     current_offset = ibf_dump_pos(dump);
 
-    if (SPECIAL_CONST_P(obj) &&
+    if (WSPECIAL_CONST_P(obj) &&
         ! (SYMBOL_P(obj) ||
            RB_FLOAT_TYPE_P(obj))) {
         obj_header.special_const = TRUE;
@@ -14727,7 +14729,7 @@ ibf_dump_object_object(struct ibf_dump *dump, VALUE obj)
         ibf_dump_write_small_value(dump, obj);
     }
     else {
-        obj_header.internal = SPECIAL_CONST_P(obj) ? FALSE : (RBASIC_CLASS(obj) == 0) ? TRUE : FALSE;
+        obj_header.internal = WSPECIAL_CONST_P(obj) ? FALSE : (RBASIC_CLASS(obj) == 0) ? TRUE : FALSE;
         obj_header.special_const = FALSE;
         obj_header.frozen = OBJ_FROZEN(obj) ? TRUE : FALSE;
         ibf_dump_object_object_header(dump, obj_header);

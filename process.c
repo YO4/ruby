@@ -1829,7 +1829,7 @@ check_exec_redirect_fd(VALUE v, int iskey)
 {
     VALUE tmp;
     int fd;
-    if (FIXNUM_P(v)) {
+    if (WFIXNUM_P(v)) {
         fd = FIX2INT(v);
     }
     else if (SYMBOL_P(v)) {
@@ -1960,7 +1960,7 @@ check_exec_redirect(VALUE key, VALUE val, struct rb_execarg *eargp)
         FilePathValue(path);
         if (RB_TYPE_P(key, T_FILE))
             key = check_exec_redirect_fd(key, 1);
-        if (FIXNUM_P(key) && (FIX2INT(key) == 1 || FIX2INT(key) == 2))
+        if (WFIXNUM_P(key) && (FIX2INT(key) == 1 || FIX2INT(key) == 2))
             flags = INT2NUM(O_WRONLY|O_CREAT|O_TRUNC);
         else if (RB_TYPE_P(key, T_ARRAY)) {
             int i;
@@ -2256,7 +2256,7 @@ check_exec_fds(struct rb_execarg *eargp)
             int lastfd = oldfd;
             VALUE val = rb_hash_lookup(h, INT2FIX(lastfd));
             long depth = 0;
-            while (FIXNUM_P(val) && 0 <= FIX2INT(val)) {
+            while (WFIXNUM_P(val) && 0 <= FIX2INT(val)) {
                 lastfd = FIX2INT(val);
                 val = rb_hash_lookup(h, val);
                 if (RARRAY_LEN(ary) < depth)
@@ -2270,7 +2270,7 @@ check_exec_fds(struct rb_execarg *eargp)
                 rb_ary_store(elt, 1, INT2FIX(lastfd));
                 rb_hash_aset(h, INT2FIX(newfd), INT2FIX(lastfd));
                 val = INT2FIX(oldfd);
-                while (FIXNUM_P(val2 = rb_hash_lookup(h, val))) {
+                while (WFIXNUM_P(val2 = rb_hash_lookup(h, val))) {
                     rb_hash_aset(h, val, INT2FIX(lastfd));
                     val = val2;
                 }
@@ -2379,7 +2379,7 @@ rb_check_argv(int argc, VALUE *argv)
 static VALUE
 check_hash(VALUE obj)
 {
-    if (RB_SPECIAL_CONST_P(obj)) return Qnil;
+    if (WSPECIAL_CONST_P(obj)) return Qnil;
     switch (RB_BUILTIN_TYPE(obj)) {
       case T_STRING:
       case T_ARRAY:
@@ -5934,7 +5934,7 @@ obj2uid(VALUE id
     rb_uid_t uid;
     VALUE tmp;
 
-    if (FIXNUM_P(id) || NIL_P(tmp = rb_check_string_type(id))) {
+    if (WFIXNUM_P(id) || NIL_P(tmp = rb_check_string_type(id))) {
         uid = NUM2UIDT(id);
     }
     else {
@@ -6033,7 +6033,7 @@ obj2gid(VALUE id
     rb_gid_t gid;
     VALUE tmp;
 
-    if (FIXNUM_P(id) || NIL_P(tmp = rb_check_string_type(id))) {
+    if (WFIXNUM_P(id) || NIL_P(tmp = rb_check_string_type(id))) {
         gid = NUM2GIDT(id);
     }
     else {

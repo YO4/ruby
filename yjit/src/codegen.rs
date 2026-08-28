@@ -6331,7 +6331,7 @@ fn jit_rb_str_concat(
     // If the peeked-at compile time argument is something other than
     // a string, assume it won't be a string later either.
     let comptime_arg = jit.peek_at_stack(&asm.ctx, 0);
-    if unsafe { RB_TYPE_P(comptime_arg, RUBY_T_FIXNUM) } {
+    if comptime_arg.fixnum_p() {
         return jit_rb_str_concat_codepoint(jit, asm, ci, cme, block, argc, known_recv_class);
     }
 

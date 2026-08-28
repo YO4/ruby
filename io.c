@@ -5279,7 +5279,7 @@ rb_io_ungetc(VALUE io, VALUE c)
 
     GetOpenFile(io, fptr);
     rb_io_check_char_readable(fptr);
-    if (FIXNUM_P(c)) {
+    if (WFIXNUM_P(c)) {
         c = rb_enc_uint_chr(FIX2UINT(c), io_read_encoding(fptr));
     }
     else if (RB_BIGNUM_TYPE_P(c)) {
@@ -11444,8 +11444,8 @@ setup_narg(ioctl_req_t cmd, VALUE *argp, long (*narg_len)(ioctl_req_t))
     if (!RTEST(arg)) {
         narg = 0;
     }
-    else if (FIXNUM_P(arg)) {
-        narg = FIX2LONG(arg);
+    else if (WFIXNUM_P(arg)) {
+        narg = FIX2SV(arg);
     }
     else if (arg == Qtrue) {
         narg = 1;

@@ -68,8 +68,11 @@ RB_ST2FIX(st_data_t i)
     }
 
     RBIMPL_ASSERT_OR_ASSUME(RB_FIXABLE(x));
-    unsigned long y = RBIMPL_CAST((unsigned long)x);
-    return RB_LONG2FIX(RBIMPL_CAST((long)y));
+    /* Encoding is done on the full VALUE width; the mask above decides which
+     * range survives, so this is safe for both the long-sized compatibility
+     * view and the interpreter's wider immediates. */
+    const uintptr_t y = RBIMPL_CAST((uintptr_t)x);
+    return RBIMPL_CAST((VALUE)((y << 1) | RUBY_FIXNUM_FLAG));
 }
 
 #endif /* RBIMPL_ARITHMETIC_ST_DATA_T_H */

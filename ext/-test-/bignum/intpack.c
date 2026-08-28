@@ -1,4 +1,5 @@
 #include "internal/bignum.h"
+#include "internal/numeric.h"          /* for rb_num_negative_p */
 
 static VALUE
 rb_integer_pack_raw_m(VALUE klass, VALUE val, VALUE buf, VALUE numwords_arg, VALUE wordsize_arg, VALUE nails, VALUE flags)
@@ -13,7 +14,10 @@ rb_integer_pack_raw_m(VALUE klass, VALUE val, VALUE buf, VALUE numwords_arg, VAL
       RSTRING_PTR(buf), NUM2SIZET(numwords_arg),
       NUM2SIZET(wordsize_arg), NUM2SIZET(nails), NUM2INT(flags));
 
-  return rb_ary_new_from_args(2, INT2NUM(sign), rb_str_new(RSTRING_PTR(buf), wordsize * numwords));
+  VALUE ary = rb_ary_new_capa(2);
+  rb_ary_push(ary, INT2NUM(sign));
+  rb_ary_push(ary, rb_str_new(RSTRING_PTR(buf), wordsize * numwords));
+  return ary;
 }
 
 static VALUE
@@ -48,7 +52,9 @@ static VALUE
 rb_integer_test_numbits_2comp_without_sign(VALUE klass, VALUE val)
 {
   size_t size;
-  int neg = FIXNUM_P(val) ? FIX2LONG(val) < 0 : BIGNUM_NEGATIVE_P(val);
+  /* A Fixnum can be wider than C's `long'; do not assume FIXNUM_P() covers
+   * every immediate. */
+  int neg = rb_num_negative_p(val);
   size = rb_absint_numwords(val, 1, NULL) - (neg && rb_absint_singlebit_p(val));
   return SIZET2NUM(size);
 }
@@ -56,7 +62,7 @@ rb_integer_test_numbits_2comp_without_sign(VALUE klass, VALUE val)
 static VALUE
 rb_integer_test_numbytes_2comp_with_sign(VALUE klass, VALUE val)
 {
-  int neg = FIXNUM_P(val) ? FIX2LONG(val) < 0 : BIGNUM_NEGATIVE_P(val);
+  int neg = rb_num_negative_p(val);
   int nlz_bits;
   size_t size = rb_absint_size(val, &nlz_bits);
   if (nlz_bits == 0 && !(neg && rb_absint_singlebit_p(val)))

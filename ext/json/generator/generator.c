@@ -1212,10 +1212,25 @@ start:
         generate_json_false(buffer, data, obj);
     } else if (obj == Qtrue) {
         generate_json_true(buffer, data, obj);
-    } else if (RB_SPECIAL_CONST_P(obj)) {
-        if (RB_FIXNUM_P(obj)) {
+    } else if (RB_INTEGER_TYPE_P(obj)) {
+        /* All integers (legacy Fixnums, wide immediates, and heap Bignums)
+         * are dispatched here before any SPECIAL_CONST_P check, because
+         * wide immediates fail the legacy special-const test in extension
+         * context and must not fall into the heap-object path.
+         *
+         * RB_INTEGER_TYPE_P uses physical checks internally so it never
+         * dereferences immediate values.  */
+        if (FIXNUM_P(obj)) {
+            /* Legacy Fixnum: value fits in C's `long', use fast path */
             generate_json_fixnum(buffer, data, obj);
-        } else if (RB_FLONUM_P(obj)) {
+        } else {
+            /* Wide immediate or heap Bignum: format via to_s */
+            generate_json_bignum(buffer, data, obj);
+        }
+    } else if (RB_SPECIAL_CONST_P(obj)) {
+        /* Remaining special constants after integers are excluded:
+         * only Flonums and static symbols. */
+        if (RB_FLONUM_P(obj)) {
             generate_json_float(buffer, data, obj);
         } else if (RB_STATIC_SYM_P(obj)) {
             generate_json_symbol(buffer, data, obj);

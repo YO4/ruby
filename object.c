@@ -82,7 +82,7 @@ static VALUE rb_cFalseClass_to_s;
 static ID id_instance_variables_to_inspect;
 
 #define CLASS_OR_MODULE_P(obj) \
-    (!SPECIAL_CONST_P(obj) && \
+    (!WSPECIAL_CONST_P(obj) && \
      (BUILTIN_TYPE(obj) == T_CLASS || BUILTIN_TYPE(obj) == T_MODULE))
 
 /*! \endcond */
@@ -91,7 +91,7 @@ static ID id_instance_variables_to_inspect;
 VALUE
 rb_obj_hide(VALUE obj)
 {
-    if (!SPECIAL_CONST_P(obj)) {
+    if (!WSPECIAL_CONST_P(obj)) {
         RBASIC_CLEAR_CLASS(obj);
     }
     return obj;
@@ -100,7 +100,7 @@ rb_obj_hide(VALUE obj)
 VALUE
 rb_obj_reveal(VALUE obj, VALUE klass)
 {
-    if (!SPECIAL_CONST_P(obj)) {
+    if (!WSPECIAL_CONST_P(obj)) {
         RBASIC_SET_CLASS(obj, klass);
     }
     return obj;
@@ -397,7 +397,7 @@ PUREFUNC(static inline int special_object_p(VALUE obj)); /*!< \private */
 static inline int
 special_object_p(VALUE obj)
 {
-    if (SPECIAL_CONST_P(obj)) return TRUE;
+    if (WSPECIAL_CONST_P(obj)) return TRUE;
     switch (BUILTIN_TYPE(obj)) {
       case T_BIGNUM:
       case T_FLOAT:
@@ -1361,7 +1361,7 @@ rb_obj_freeze(VALUE obj)
 {
     if (!OBJ_FROZEN(obj)) {
         OBJ_FREEZE(obj);
-        if (SPECIAL_CONST_P(obj)) {
+        if (WSPECIAL_CONST_P(obj)) {
             rb_bug("special consts should be frozen.");
         }
     }
@@ -3448,7 +3448,7 @@ rb_convert_to_integer(VALUE val, int base, int raise_exception)
     if (RB_FLOAT_TYPE_P(val)) {
         double f = RFLOAT_VALUE(val);
         if (!raise_exception && !isfinite(f)) return Qnil;
-        if (FIXABLE(f)) return LONG2FIX((long)f);
+        if (RBIMPL_FIXABLE(f)) return rb_int2inum((SIGNED_VALUE)f);
         return rb_dbl2big(f);
     }
     else if (RB_INTEGER_TYPE_P(val)) {
@@ -3724,12 +3724,12 @@ rb_str_to_dbl(VALUE str, int badcheck)
 }
 
 /*! \cond INTERNAL_MACRO */
-#define fix2dbl_without_to_f(x) (double)FIX2LONG(x)
+#define fix2dbl_without_to_f(x) (double)FIX2SV(x)
 #define big2dbl_without_to_f(x) rb_big2dbl(x)
 #define int2dbl_without_to_f(x) \
-    (FIXNUM_P(x) ? fix2dbl_without_to_f(x) : big2dbl_without_to_f(x))
+    (WFIXNUM_P(x) ? fix2dbl_without_to_f(x) : big2dbl_without_to_f(x))
 #define num2dbl_without_to_f(x) \
-    (FIXNUM_P(x) ? fix2dbl_without_to_f(x) : \
+    (WFIXNUM_P(x) ? fix2dbl_without_to_f(x) : \
      RB_BIGNUM_TYPE_P(x) ? big2dbl_without_to_f(x) : \
      (Check_Type(x, T_FLOAT), RFLOAT_VALUE(x)))
 static inline double
@@ -3755,8 +3755,8 @@ static int
 to_float(VALUE *valp, int raise_exception)
 {
     VALUE val = *valp;
-    if (SPECIAL_CONST_P(val)) {
-        if (FIXNUM_P(val)) {
+    if (WSPECIAL_CONST_P(val)) {
+        if (WFIXNUM_P(val)) {
             *valp = DBL2NUM(fix2dbl_without_to_f(val));
             return T_FLOAT;
         }
@@ -3805,7 +3805,7 @@ rb_convert_to_float(VALUE val, int raise_exception)
         }
         return DBL2NUM(rb_str_to_dbl(val, TRUE));
       case T_NONE:
-        if (SPECIAL_CONST_P(val) && !raise_exception)
+        if (WSPECIAL_CONST_P(val) && !raise_exception)
             return Qnil;
     }
 
@@ -3879,8 +3879,8 @@ basic_to_f_p(VALUE klass)
 double
 rb_num_to_dbl(VALUE val)
 {
-    if (SPECIAL_CONST_P(val)) {
-        if (FIXNUM_P(val)) {
+    if (WSPECIAL_CONST_P(val)) {
+        if (WFIXNUM_P(val)) {
             if (basic_to_f_p(rb_cInteger))
                 return fix2dbl_without_to_f(val);
         }
@@ -3914,8 +3914,8 @@ rb_num_to_dbl(VALUE val)
 double
 rb_num2dbl(VALUE val)
 {
-    if (SPECIAL_CONST_P(val)) {
-        if (FIXNUM_P(val)) {
+    if (WSPECIAL_CONST_P(val)) {
+        if (WFIXNUM_P(val)) {
             return fix2dbl_without_to_f(val);
         }
         else if (FLONUM_P(val)) {
@@ -4097,7 +4097,7 @@ rb_obj_dig(int argc, VALUE *argv, VALUE obj, VALUE notfound)
 
     for (; argc > 0; ++argv, --argc) {
         if (NIL_P(obj)) return notfound;
-        if (!SPECIAL_CONST_P(obj)) {
+        if (!WSPECIAL_CONST_P(obj)) {
             switch (BUILTIN_TYPE(obj)) {
               case T_HASH:
                 if (dig_basic_p(obj, &hash)) {

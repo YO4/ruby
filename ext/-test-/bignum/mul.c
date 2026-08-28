@@ -1,11 +1,13 @@
 #include "internal/bignum.h"
+#include "internal/numeric.h" /* for RB_INTEGER_TYPE_P, rb_num2ll */
 
 static VALUE
 big(VALUE x)
 {
-    if (FIXNUM_P(x))
-        return rb_int2big(FIX2LONG(x));
-    if (RB_TYPE_P(x, T_BIGNUM))
+    /* A Fixnum can exceed C's `long'; decode at full width. */
+    if (!RB_BIGNUM_TYPE_P(x) && RB_INTEGER_TYPE_P(x))
+        return rb_int2big((intptr_t)rb_num2ll(x));
+    if (RB_BIGNUM_TYPE_P(x))
         return x;
     rb_raise(rb_eTypeError, "can't convert %s to Bignum",
             rb_obj_classname(x));

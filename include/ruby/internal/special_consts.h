@@ -50,7 +50,7 @@
 /** This is an old name of #RB_TEST.  Not sure which name is preferred. */
 #define RTEST           RB_TEST
 
-#define FIXNUM_P        RB_FIXNUM_P            /**< @old{RB_FIXNUM_P} */
+#define FIXNUM_P        rbimpl_fixnum_p_legacy /**< @old{RB_FIXNUM_P} */
 #define IMMEDIATE_P     RB_IMMEDIATE_P         /**< @old{RB_IMMEDIATE_P} */
 #define NIL_P           RB_NIL_P               /**< @old{RB_NIL_P} */
 #define SPECIAL_CONST_P RB_SPECIAL_CONST_P     /**< @old{RB_SPECIAL_CONST_P} */
@@ -69,7 +69,7 @@
 #define SYMBOL_FLAG        RUBY_SYMBOL_FLAG    /**< @old{RUBY_SYMBOL_FLAG} */
 
 /** @cond INTERNAL_MACRO */
-#define RB_FIXNUM_P        RB_FIXNUM_P
+#define RB_FIXNUM_P        rbimpl_fixnum_p_legacy
 #define RB_FLONUM_P        RB_FLONUM_P
 #define RB_IMMEDIATE_P     RB_IMMEDIATE_P
 #define RB_NIL_P           RB_NIL_P
@@ -237,16 +237,45 @@ RBIMPL_ATTR_ARTIFICIAL()
 /**
  * Checks if the given object is a so-called Fixnum.
  *
+ * This predicate tests the physical tag only.  Whether the value fits into
+ * C's `long' is a separate question answered by rbimpl_fixnum_p_legacy().
+ *
  * @param[in]  obj    An arbitrary ruby object.
  * @retval     true   `obj` is a Fixnum.
  * @retval     false  Anything else.
- * @note       Fixnum was  a thing  in the  20th century, but  it is  rather an
- *             implementation detail today.
  */
 static inline bool
-RB_FIXNUM_P(VALUE obj)
+rbimpl_fixnum_p(VALUE obj)
 {
     return obj & RUBY_FIXNUM_FLAG;
+}
+
+RBIMPL_ATTR_CONST()
+RBIMPL_ATTR_CONSTEXPR(CXX11)
+RBIMPL_ATTR_ARTIFICIAL()
+/**
+ * Checks the Fixnum range visible to the old C API.
+ *
+ * The interpreter may use a wider immediate representation than C's `long`.
+ * Values outside the historical range must not be passed to FIX2LONG() by an
+ * extension compiled against that API.
+ */
+static inline bool
+rbimpl_fixnum_p_legacy(VALUE obj)
+{
+#if SIZEOF_LONG < SIZEOF_VALUE
+    if (rbimpl_fixnum_p(obj)) {
+        /* Decode the encoded VALUE (obj = 2*v + 1) before comparing against
+         * the historical Fixnum range (LONG_MIN/2 .. LONG_MAX/2).  Comparing
+         * the encoded object excluded roughly half of the long-range Fixnums
+         * on LLP64. */
+        SIGNED_VALUE v = (SIGNED_VALUE)(obj - RUBY_FIXNUM_FLAG) / 2;
+        return v >= (SIGNED_VALUE)(LONG_MIN / 2) && v <= (SIGNED_VALUE)(LONG_MAX / 2);
+    }
+    return false;
+#else
+    return rbimpl_fixnum_p(obj);
+#endif
 }
 
 RBIMPL_ATTR_CONST()
@@ -317,16 +346,64 @@ RBIMPL_ATTR_CONST()
 RBIMPL_ATTR_CONSTEXPR(CXX11)
 RBIMPL_ATTR_ARTIFICIAL()
 /**
- * Checks if the given object is of enum ::ruby_special_consts.
+ * Checks if the given object is an immediate from the interpreter's
+ * perspective.  This includes wide immediates that exceed C's `long'.
+ *
+ * This is the PHYSICAL check used by the GC and interpreter internals.
+ * Extension libraries should use RB_SPECIAL_CONST_P() instead.
  *
  * @param[in]  obj    An arbitrary ruby object.
- * @retval     true   `obj` is a special constant.
+ * @retval     true   `obj` has no corresponding storage inside the object space.
+ * @retval     false  Otherwise.
+ */
+static inline bool
+rbimm_special_const_p(VALUE obj)
+{
+    return (obj == RUBY_Qfalse) || (obj & RUBY_IMMEDIATE_MASK);
+}
+
+/**
+ * Wide/physical special-const check, identical to rbimm_special_const_p().
+ *
+ * Unlike #RB_SPECIAL_CONST_P this keeps wide immediates (Fixnums that exceed
+ * C's `long') visible.  Core code uses this whenever it must observe the full
+ * immediate range; the historical long-sized view is #RB_SPECIAL_CONST_P.
+ */
+#define WSPECIAL_CONST_P rbimm_special_const_p
+
+RBIMPL_ATTR_CONST()
+RBIMPL_ATTR_CONSTEXPR(CXX11)
+RBIMPL_ATTR_ARTIFICIAL()
+/**
+ * Checks if the given object is of enum ::ruby_special_consts.
+ *
+ * On LLP64 platforms where Fixnums can be wider than C's `long', values
+ * beyond the historical Fixnum range are excluded here so that extension
+ * libraries perceive them as Bignums.
+ *
+ * @param[in]  obj    An arbitrary ruby object.
+ * @retval     true   `obj` is a special constant visible to the old C API.
  * @retval     false  Anything else.
  */
 static inline bool
 RB_SPECIAL_CONST_P(VALUE obj)
 {
-    return (obj == RUBY_Qfalse) || RB_IMMEDIATE_P(obj);
+    if (!(obj == RUBY_Qfalse) && !(obj & RUBY_IMMEDIATE_MASK)) {
+        return false;
+    }
+#if SIZEOF_LONG < SIZEOF_VALUE
+    /* Exclude wide immediates: they are not visible as special constants
+     * to extension libraries compiled against the old C API.  Compare the
+     * decoded value, not the encoded VALUE, against the historical Fixnum
+     * range (LONG_MIN/2 .. LONG_MAX/2). */
+    if (obj & RUBY_FIXNUM_FLAG) {
+        SIGNED_VALUE v = (SIGNED_VALUE)(obj - RUBY_FIXNUM_FLAG) / 2;
+        if (!(v >= (SIGNED_VALUE)(LONG_MIN / 2) && v <= (SIGNED_VALUE)(LONG_MAX / 2))) {
+            return false;
+        }
+    }
+#endif
+    return true;
 }
 
 RBIMPL_ATTR_CONST()

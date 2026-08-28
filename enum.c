@@ -497,9 +497,9 @@ enum_size(VALUE self, VALUE args, VALUE eobj)
 static long
 limit_by_enum_size(VALUE obj, long n)
 {
-    unsigned long limit;
+    uintptr_t limit;
     VALUE size = rb_check_funcall(obj, id_size, 0, 0);
-    if (!FIXNUM_P(size)) return n;
+    if (!WFIXNUM_P(size)) return n;
     limit = FIX2ULONG(size);
     return ((unsigned long)n > limit) ? (long)limit : n;
 }
@@ -508,8 +508,8 @@ static int
 enum_size_over_p(VALUE obj, long n)
 {
     VALUE size = rb_check_funcall(obj, id_size, 0, 0);
-    if (!FIXNUM_P(size)) return 0;
-    return ((unsigned long)n > FIX2ULONG(size));
+    if (!WFIXNUM_P(size)) return 0;
+    return ((uintptr_t)(unsigned long)n > FIX2ULONG(size));
 }
 
 /*
@@ -841,7 +841,8 @@ ary_inject_op(VALUE ary, VALUE init, VALUE op)
 {
     ID id;
     VALUE v, e;
-    long i, n;
+    long i;
+    SIGNED_VALUE n;
 
     if (RARRAY_LEN(ary) == 0)
         return UNDEF_P(init) ? Qnil : init;
@@ -865,10 +866,21 @@ ary_inject_op(VALUE ary, VALUE init, VALUE op)
             n = 0;
             for (; i < RARRAY_LEN(ary); i++) {
                 e = RARRAY_AREF(ary, i);
-                if (FIXNUM_P(e)) {
-                    n += FIX2LONG(e); /* should not overflow long type */
-                    if (!FIXABLE(n)) {
-                        v = rb_big_plus(LONG2NUM(n), v);
+                if (WFIXNUM_P(e)) {
+                    SIGNED_VALUE x = FIX2SV(e);
+                    if (ADD_OVERFLOW_SIGNED_INTEGER_P(n, x, RBIMPL_FIXNUM_MIN, RBIMPL_FIXNUM_MAX)) {
+                        if (n) {
+                            v = rb_int_plus(rb_int2inum(n), v);
+                            n = 0;
+                        }
+                        if (!RBIMPL_FIXABLE(x)) {
+                            v = rb_big_plus(rb_int2big(x), v);
+                            continue;
+                        }
+                    }
+                    n += x;
+                    if (!RBIMPL_FIXABLE(n)) {
+                        v = rb_big_plus(rb_int2big(n), v);
                         n = 0;
                     }
                 }
@@ -878,12 +890,12 @@ ary_inject_op(VALUE ary, VALUE init, VALUE op)
                     goto not_integer;
             }
             if (n != 0)
-                v = rb_fix_plus(LONG2FIX(n), v);
+                v = rb_fix_plus(rb_int2inum(n), v);
             return v;
 
           not_integer:
             if (n != 0)
-                v = rb_fix_plus(LONG2FIX(n), v);
+                v = rb_fix_plus(rb_int2inum(n), v);
         }
     }
     for (; i < RARRAY_LEN(ary); i++) {
@@ -1211,8 +1223,9 @@ tally_up(st_data_t *group, st_data_t *value, st_data_t arg, int existing)
     if (!existing) {
         tally = INT2FIX(1);
     }
-    else if (FIXNUM_P(tally) && tally < INT2FIX(FIXNUM_MAX)) {
-        tally += INT2FIX(1) & ~FIXNUM_FLAG;
+    else if (WFIXNUM_P(tally) &&
+             RBIMPL_FIXNUM_VALUE(tally) < RBIMPL_FIXNUM_MAX) {
+        tally = RBIMPL_FIXNUM_FROM_VALUE(RBIMPL_FIXNUM_VALUE(tally) + 1);
     }
     else {
         Check_Type(tally, T_BIGNUM);
@@ -1422,9 +1435,9 @@ sort_by_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, _data))
     }
 
     if (data->primitive_uniformed) {
-        data->primitive_uniformed &= SORT_BY_UNIFORMED((FIXNUM_P(v)) || (RB_FLOAT_TYPE_P(v)),
+        data->primitive_uniformed &= SORT_BY_UNIFORMED((WFIXNUM_P(v)) || (RB_FLOAT_TYPE_P(v)),
                                                         RB_FLOAT_TYPE_P(v),
-                                                        FIXNUM_P(v));
+                                                        WFIXNUM_P(v));
     }
     RARRAY_ASET(data->buf, data->n*2, v);
     RARRAY_ASET(data->buf, data->n*2+1, i);
@@ -1471,10 +1484,10 @@ static inline bool
 rb_uniform_is_less(VALUE a, VALUE b)
 {
 
-    if (FIXNUM_P(a) && FIXNUM_P(b)) {
+    if (WFIXNUM_P(a) && WFIXNUM_P(b)) {
         return (SIGNED_VALUE)a < (SIGNED_VALUE)b;
     }
-    else if (FIXNUM_P(a)) {
+    else if (WFIXNUM_P(a)) {
         RUBY_ASSERT(RB_FLOAT_TYPE_P(b));
         return rb_float_cmp(b, a) > 0;
     }
@@ -1488,10 +1501,10 @@ static inline bool
 rb_uniform_is_larger(VALUE a, VALUE b)
 {
 
-    if (FIXNUM_P(a) && FIXNUM_P(b)) {
+    if (WFIXNUM_P(a) && WFIXNUM_P(b)) {
         return (SIGNED_VALUE)a > (SIGNED_VALUE)b;
     }
-    else if (FIXNUM_P(a)) {
+    else if (WFIXNUM_P(a)) {
         RUBY_ASSERT(RB_FLOAT_TYPE_P(b));
         return rb_float_cmp(b, a) < 0;
     }
@@ -4601,7 +4614,7 @@ enum_chunk_while(VALUE enumerable)
 
 struct enum_sum_memo {
     VALUE v, r;
-    long n;
+    SIGNED_VALUE n;
     double f, c;
     int block_given;
     int float_value;
@@ -4610,8 +4623,8 @@ struct enum_sum_memo {
 static void
 sum_iter_normalize_memo(struct enum_sum_memo *memo)
 {
-    RUBY_ASSERT(FIXABLE(memo->n));
-    memo->v = rb_fix_plus(LONG2FIX(memo->n), memo->v);
+    RUBY_ASSERT(RBIMPL_FIXABLE(memo->n));
+    memo->v = rb_fix_plus(rb_int2inum(memo->n), memo->v);
     memo->n = 0;
 
     switch (TYPE(memo->r)) {
@@ -4625,9 +4638,21 @@ sum_iter_normalize_memo(struct enum_sum_memo *memo)
 static void
 sum_iter_fixnum(VALUE i, struct enum_sum_memo *memo)
 {
-    memo->n += FIX2LONG(i); /* should not overflow long type */
-    if (! FIXABLE(memo->n)) {
-        memo->v = rb_big_plus(LONG2NUM(memo->n), memo->v);
+    SIGNED_VALUE x = FIX2SV(i);
+    if (ADD_OVERFLOW_SIGNED_INTEGER_P(memo->n, x, RBIMPL_FIXNUM_MIN, RBIMPL_FIXNUM_MAX)) {
+        /* Flush the accumulator before it can overflow the immediate range. */
+        if (memo->n) {
+            memo->v = rb_int_plus(rb_int2inum(memo->n), memo->v);
+            memo->n = 0;
+        }
+        if (!RBIMPL_FIXABLE(x)) {
+            memo->v = rb_big_plus(rb_int2big(x), memo->v);
+            return;
+        }
+    }
+    memo->n += x;
+    if (!RBIMPL_FIXABLE(memo->n)) {
+        memo->v = rb_big_plus(rb_int2big(memo->n), memo->v);
         memo->n = 0;
     }
 }
@@ -4666,7 +4691,7 @@ sum_iter_Kahan_Babuska(VALUE i, struct enum_sum_memo *memo)
 
     switch (TYPE(i)) {
       case T_FLOAT:    x = RFLOAT_VALUE(i); break;
-      case T_FIXNUM:   x = FIX2LONG(i);     break;
+      case T_FIXNUM:   x = (double)FIX2SV(i);     break;
       case T_BIGNUM:   x = rb_big2dbl(i);   break;
       case T_RATIONAL: x = rb_num2dbl(i);   break;
       default:
@@ -4773,8 +4798,8 @@ static VALUE
 int_range_sum(VALUE beg, VALUE end, int excl, VALUE init)
 {
     if (excl) {
-        if (FIXNUM_P(end))
-            end = LONG2FIX(FIX2LONG(end) - 1);
+        if (WFIXNUM_P(end))
+            end = rb_int2inum(FIX2SV(end) - 1);
         else
             end = rb_big_minus(end, LONG2FIX(1));
     }
@@ -4844,8 +4869,8 @@ enum_sum(int argc, VALUE* argv, VALUE obj)
 
     if (RTEST(rb_range_values(obj, &beg, &end, &excl))) {
         if (!memo.block_given && !memo.float_value &&
-                (FIXNUM_P(beg) || RB_BIGNUM_TYPE_P(beg)) &&
-                (FIXNUM_P(end) || RB_BIGNUM_TYPE_P(end))) {
+                (WFIXNUM_P(beg) || RB_BIGNUM_TYPE_P(beg)) &&
+                (WFIXNUM_P(end) || RB_BIGNUM_TYPE_P(end))) {
             return int_range_sum(beg, end, excl, memo.v);
         }
     }
@@ -4861,7 +4886,7 @@ enum_sum(int argc, VALUE* argv, VALUE obj)
     }
     else {
         if (memo.n != 0)
-            memo.v = rb_fix_plus(LONG2FIX(memo.n), memo.v);
+            memo.v = rb_fix_plus(rb_int2inum(memo.n), memo.v);
         if (!UNDEF_P(memo.r)) {
             memo.v = rb_rational_plus(memo.r, memo.v);
         }

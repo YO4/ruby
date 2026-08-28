@@ -345,8 +345,8 @@ rb_strftime_with_timespec(VALUE ftime, const char *format, size_t format_len,
 #define FMTV(def_pad, def_prec, fmt, val) \
                 do { \
                         VALUE tmp = (val); \
-                        if (FIXNUM_P(tmp)) { \
-                                FMT((def_pad), (def_prec), "l"fmt, FIX2LONG(tmp)); \
+                        if (WFIXNUM_P(tmp)) { \
+                                FMT((def_pad), (def_prec), "l"fmt, FIX2SV(tmp)); \
                         } \
                         else { \
 				const int base = ((fmt[0] == 'x') ? 16 : \
@@ -533,8 +533,8 @@ rb_strftime_with_timespec(VALUE ftime, const char *format, size_t format_len,
 			continue;
 
 		case 'Y':	/* year with century */
-                        if (FIXNUM_P(vtm->year)) {
-				long y = FIX2LONG(vtm->year);
+                        if (WFIXNUM_P(vtm->year)) {
+				long y = FIX2SV(vtm->year);
 				FMT('0', 0 <= y ? 4 : 5, "ld", y);
                         }
                         else {
@@ -755,8 +755,8 @@ rb_strftime_with_timespec(VALUE ftime, const char *format, size_t format_len,
                                         yv = sub(yv, INT2FIX(1));
 
                                 if (*format == 'G') {
-                                        if (FIXNUM_P(yv)) {
-                                                const long y = FIX2LONG(yv);
+                                        if (WFIXNUM_P(yv)) {
+                                                const long y = FIX2SV(yv);
                                                 FMT('0', 0 <= y ? 4 : 5, "ld", y);
                                         }
                                         else {
@@ -765,7 +765,7 @@ rb_strftime_with_timespec(VALUE ftime, const char *format, size_t format_len,
                                 }
                                 else {
                                         yv = mod(yv, INT2FIX(100));
-                                        y = FIX2LONG(yv);
+                                        y = FIX2SV(yv);
                                         FMT('0', 2, "ld", y);
                                 }
                                 continue;
@@ -826,8 +826,11 @@ rb_strftime_with_timespec(VALUE ftime, const char *format, size_t format_len,
                                         subsec = mul(subsec, INT2FIX(n));
                                 subsec = div(subsec, INT2FIX(1));
 
-                                if (FIXNUM_P(subsec)) {
-                                        (void)snprintf(s, endp - s, "%0*ld", precision, FIX2LONG(subsec));
+                                if (WFIXNUM_P(subsec)) {
+                                        /* FIX2LONG may exceed C's `long'
+                                         * on LLP64; use the VALUE-wide
+                                         * format specifier. */
+                                        (void)snprintf(s, endp - s, "%0*"PRIdVALUE, precision, FIX2SV(subsec));
                                         s += precision;
                                 }
                                 else {

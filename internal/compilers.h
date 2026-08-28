@@ -69,7 +69,7 @@
 #define rb_obj_builtin_type(obj) \
 __extension__({ \
     VALUE arg_obj = (obj); \
-    RB_SPECIAL_CONST_P(arg_obj) ? -1 : \
+    WSPECIAL_CONST_P(arg_obj) ? -1 : \
         (int)RB_BUILTIN_TYPE(arg_obj);    \
     })
 #else
@@ -77,7 +77,7 @@ __extension__({ \
 static inline int
 rb_obj_builtin_type(VALUE obj)
 {
-    return RB_SPECIAL_CONST_P(obj) ? -1 :
+    return WSPECIAL_CONST_P(obj) ? -1 :
         (int)RB_BUILTIN_TYPE(obj);
 }
 #endif

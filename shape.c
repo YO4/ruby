@@ -401,7 +401,7 @@ rb_shape_each_shape_id(each_shape_callback callback, void *data)
 RUBY_FUNC_EXPORTED shape_id_t
 rb_obj_shape_id(VALUE obj)
 {
-    if (RB_SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
         rb_bug("rb_obj_shape_id: called on a special constant");
     }
 
@@ -1504,7 +1504,7 @@ rb_shape_parent(VALUE self)
 static VALUE
 rb_shape_debug_shape(VALUE self, VALUE obj)
 {
-    if (RB_SPECIAL_CONST_P(obj)) {
+    if (WSPECIAL_CONST_P(obj)) {
         rb_raise(rb_eArgError, "Can't get shape of special constant");
     }
     return shape_id_t_to_rb_cShape(rb_obj_shape_id(obj));

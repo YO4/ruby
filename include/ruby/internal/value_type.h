@@ -105,7 +105,7 @@
 /** @endcond */
 
 /** @old{rb_type} */
-#define TYPE(_)           RBIMPL_CAST((int)rb_type(_))
+#define TYPE(_)           RBIMPL_CAST((int)rb_type_legacy(_))
 
 /** C-level type of an object. */
 enum
@@ -203,10 +203,10 @@ RBIMPL_ATTR_PURE_UNLESS_DEBUG()
 static inline bool
 rb_integer_type_p(VALUE obj)
 {
-    if (RB_FIXNUM_P(obj)) {
+    if (rbimpl_fixnum_p(obj)) {
         return true;
     }
-    else if (RB_SPECIAL_CONST_P(obj)) {
+    else if (rbimm_special_const_p(obj)) {
         return false;
     }
     else {
@@ -218,13 +218,17 @@ RBIMPL_ATTR_PURE_UNLESS_DEBUG()
 /**
  * Identical to RB_BUILTIN_TYPE(), except it can also accept special constants.
  *
+ * This function uses the physical check and classifies wide immediates as
+ * T_FIXNUM.  It is used by the interpreter internals; extension libraries
+ * see T_BIGNUM via the TYPE() macro instead.
+ *
  * @param[in]  obj  Object in question.
  * @return     The type of `obj`.
  */
 static inline enum ruby_value_type
 rb_type(VALUE obj)
 {
-    if (! RB_SPECIAL_CONST_P(obj)) {
+    if (! rbimm_special_const_p(obj)) {
         return RB_BUILTIN_TYPE(obj);
     }
     else if (obj == RUBY_Qfalse) {
@@ -239,7 +243,7 @@ rb_type(VALUE obj)
     else if (obj == RUBY_Qundef) {
         return RUBY_T_UNDEF;
     }
-    else if (RB_FIXNUM_P(obj)) {
+    else if (rbimpl_fixnum_p(obj)) {
         return RUBY_T_FIXNUM;
     }
     else if (RB_STATIC_SYM_P(obj)) {
@@ -249,6 +253,19 @@ rb_type(VALUE obj)
         RBIMPL_ASSUME(RB_FLONUM_P(obj));
         return RUBY_T_FLOAT;
     }
+}
+
+/* TYPE() is an old API and must retain the historical long-sized Fixnum view.
+ * The physical representation used by the interpreter is returned by rb_type.
+ */
+static inline enum ruby_value_type
+rb_type_legacy(VALUE obj)
+{
+    enum ruby_value_type type = rb_type(obj);
+    if (type == RUBY_T_FIXNUM && !rbimpl_fixnum_p_legacy(obj)) {
+        return RUBY_T_BIGNUM;
+    }
+    return type;
 }
 
 RBIMPL_ATTR_PURE_UNLESS_DEBUG()
@@ -266,7 +283,7 @@ RB_FLOAT_TYPE_P(VALUE obj)
     if (RB_FLONUM_P(obj)) {
         return true;
     }
-    else if (RB_SPECIAL_CONST_P(obj)) {
+    else if (rbimm_special_const_p(obj)) {
         return false;
     }
     else {
@@ -286,7 +303,7 @@ RBIMPL_ATTR_ARTIFICIAL()
 static inline bool
 RB_DYNAMIC_SYM_P(VALUE obj)
 {
-    if (RB_SPECIAL_CONST_P(obj)) {
+    if (rbimm_special_const_p(obj)) {
         return false;
     }
     else {
@@ -338,7 +355,7 @@ rbimpl_RB_TYPE_P_fastpath(VALUE obj, enum ruby_value_type t)
         return obj == RUBY_Qundef;
     }
     else if (t == RUBY_T_FIXNUM) {
-        return RB_FIXNUM_P(obj);
+        return rbimpl_fixnum_p_legacy(obj);
     }
     else if (t == RUBY_T_SYMBOL) {
         return RB_SYMBOL_P(obj);
@@ -346,7 +363,7 @@ rbimpl_RB_TYPE_P_fastpath(VALUE obj, enum ruby_value_type t)
     else if (t == RUBY_T_FLOAT) {
         return RB_FLOAT_TYPE_P(obj);
     }
-    else if (RB_SPECIAL_CONST_P(obj)) {
+    else if (rbimm_special_const_p(obj)) {
         return false;
     }
     else if (t == RB_BUILTIN_TYPE(obj)) {
@@ -403,8 +420,8 @@ RB_TYPE_P(VALUE obj, enum ruby_value_type t)
 # define rb_integer_type_p(obj)                                 \
     __extension__ ({                                            \
         const VALUE integer_type_obj = (obj);                   \
-        (RB_FIXNUM_P(integer_type_obj) ||                       \
-         (!RB_SPECIAL_CONST_P(integer_type_obj) &&              \
+        (rbimpl_fixnum_p(integer_type_obj) ||                    \
+         (!rbimm_special_const_p(integer_type_obj) &&             \
           RB_BUILTIN_TYPE(integer_type_obj) == RUBY_T_BIGNUM)); \
     })
 #endif
@@ -426,7 +443,7 @@ Check_Type(VALUE v, enum ruby_value_type t)
 {
     /* Typed data is not simple `T_DATA`, see `rb_check_type` */
     RUBY_ASSERT_ALWAYS(t != RUBY_T_DATA);
-    if (RB_UNLIKELY(! RB_TYPE_P(v, t))) {
+    if (RB_UNLIKELY(rb_type_legacy(v) != t)) {
         rb_unexpected_type(v, RBIMPL_CAST((int)t));
     }
 }

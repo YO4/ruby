@@ -21,12 +21,15 @@
  * @brief      Handling of integers formerly known as Fixnums.
  */
 #include "ruby/backward/2/limits.h"
+#include "ruby/internal/assume.h"
+#include "ruby/internal/special_consts.h"
+#include "ruby/internal/value.h"
 
-#define FIXABLE    RB_FIXABLE      /**< @old{RB_FIXABLE} */
+#define FIXABLE    RBIMPL_LEGACY_FIXABLE /**< @old{RB_FIXABLE} */
 #define FIXNUM_MAX RUBY_FIXNUM_MAX /**< @old{RUBY_FIXNUM_MAX} */
 #define FIXNUM_MIN RUBY_FIXNUM_MIN /**< @old{RUBY_FIXNUM_MIN} */
-#define NEGFIXABLE RB_NEGFIXABLE   /**< @old{RB_NEGFIXABLE} */
-#define POSFIXABLE RB_POSFIXABLE   /**< @old{RB_POSFIXABLE} */
+#define NEGFIXABLE RBIMPL_LEGACY_NEGFIXABLE /**< @old{RB_NEGFIXABLE} */
+#define POSFIXABLE RBIMPL_LEGACY_POSFIXABLE /**< @old{RB_POSFIXABLE} */
 
 /**
  * Checks if the passed value is in  range of fixnum, assuming it is a positive
@@ -56,5 +59,49 @@
 
 /** Minimum possible value that a fixnum can represent. */
 #define RUBY_FIXNUM_MIN  (LONG_MIN / 2)
+
+/*
+ * The public Fixnum range is deliberately based on long.  It is part of the
+ * old extension API, while the interpreter can use every payload bit in a
+ * VALUE.  Keep the latter range private to the interpreter.
+ */
+#define RBIMPL_FIXNUM_MAX ((SIGNED_VALUE)(RBIMPL_VALUE_FULL >> 2))
+#define RBIMPL_FIXNUM_MIN (-RBIMPL_FIXNUM_MAX - 1)
+
+#define RBIMPL_POSFIXABLE(_) ((_) < RBIMPL_FIXNUM_MAX + 1)
+#define RBIMPL_NEGFIXABLE(_) ((_) >= RBIMPL_FIXNUM_MIN)
+#define RBIMPL_FIXABLE(_)    (RBIMPL_POSFIXABLE(_) && RBIMPL_NEGFIXABLE(_))
+
+#define RBIMPL_LEGACY_FIXNUM_MAX (LONG_MAX / 2)
+#define RBIMPL_LEGACY_FIXNUM_MIN (LONG_MIN / 2)
+#define RBIMPL_LEGACY_POSFIXABLE(_) ((_) < RBIMPL_LEGACY_FIXNUM_MAX + 1)
+#define RBIMPL_LEGACY_NEGFIXABLE(_) ((_) >= RBIMPL_LEGACY_FIXNUM_MIN)
+#define RBIMPL_LEGACY_FIXABLE(_)    \
+    (RBIMPL_LEGACY_POSFIXABLE(_) && RBIMPL_LEGACY_NEGFIXABLE(_))
+
+/* Note: RB_FIXABLE()/RB_POSFIXABLE()/RB_NEGFIXABLE() keep their historical
+ * long-sized semantics.  The interpreter's wider immediate range is spelled
+ * RBIMPL_FIXABLE() (or the unprefixed FIXABLE(), which internal.h points at
+ * the wide variant). */
+
+static inline SIGNED_VALUE
+rbimpl_fixnum_value(VALUE x)
+{
+    /* Subtracting the tag before the signed conversion avoids shifting a
+     * negative value and is valid for the complete encoded range. */
+    return (SIGNED_VALUE)(x - RUBY_FIXNUM_FLAG) / 2;
+}
+
+static inline VALUE
+rbimpl_fixnum_from_value(SIGNED_VALUE x)
+{
+    RBIMPL_ASSERT_OR_ASSUME(RBIMPL_FIXABLE(x));
+    /* Shifting the unsigned counterpart keeps every step well defined while
+     * preserving two's complement bit patterns. */
+    return (VALUE)(((uintptr_t)x << 1) | RUBY_FIXNUM_FLAG);
+}
+
+#define RBIMPL_FIXNUM_VALUE(_)       rbimpl_fixnum_value(_)
+#define RBIMPL_FIXNUM_FROM_VALUE(_)  rbimpl_fixnum_from_value(_)
 
 #endif /* RBIMPL_ARITHMETIC_FIXNUM_H */

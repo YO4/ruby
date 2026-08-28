@@ -747,8 +747,8 @@ math_sqrt(VALUE unused_obj, VALUE x)
 inline static VALUE
 f_negative_p(VALUE x)
 {
-    if (FIXNUM_P(x))
-        return RBOOL(FIX2LONG(x) < 0);
+    if (WFIXNUM_P(x))
+        return RBOOL(FIX2SV(x) < 0);
     return rb_funcall(x, '<', 1, INT2FIX(0));
 }
 inline static VALUE

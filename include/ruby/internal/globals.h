@@ -173,7 +173,7 @@ RBIMPL_ATTR_PURE()
 static inline VALUE
 rb_class_of(VALUE obj)
 {
-    if (! RB_SPECIAL_CONST_P(obj)) {
+    if (! rbimm_special_const_p(obj)) {
         return RBASIC_CLASS(obj);
     }
     else if (obj == RUBY_Qfalse) {
@@ -185,7 +185,7 @@ rb_class_of(VALUE obj)
     else if (obj == RUBY_Qtrue) {
         return rb_cTrueClass;
     }
-    else if (RB_FIXNUM_P(obj)) {
+    else if (rbimpl_fixnum_p(obj)) {
         return rb_cInteger;
     }
     else if (RB_STATIC_SYM_P(obj)) {

@@ -759,7 +759,7 @@ wbcheck_verify_object_references(void *objspace_ptr, VALUE obj)
 static void
 wbcheck_mark_gray(rb_wbcheck_objspace_t *objspace, VALUE obj)
 {
-    if (RB_SPECIAL_CONST_P(obj)) return;
+    if (WSPECIAL_CONST_P(obj)) return;
 
     st_data_t value;
     if (!st_lookup(objspace->object_table, (st_data_t)obj, &value)) {
@@ -1190,7 +1190,7 @@ gc_mark(rb_wbcheck_objspace_t *objspace, VALUE obj)
     WBCHECK_DEBUG("wbcheck: gc_mark called\n");
     wbcheck_debug_obj_info_dump(obj);
 
-    if (RB_SPECIAL_CONST_P(obj)) return;
+    if (WSPECIAL_CONST_P(obj)) return;
 
     switch (objspace->phase) {
         case WBCHECK_PHASE_SNAPSHOT:
@@ -1310,7 +1310,7 @@ rb_gc_impl_location(void *objspace_ptr, VALUE value)
 void
 rb_gc_impl_writebarrier(void *objspace_ptr, VALUE a, VALUE b)
 {
-    if (RB_SPECIAL_CONST_P(b)) return;
+    if (WSPECIAL_CONST_P(b)) return;
 
     unsigned int lev = RB_GC_VM_LOCK_NO_BARRIER();
 
@@ -1864,7 +1864,7 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
 VALUE
 rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym)
 {
-    if (FIXNUM_P(heap_name) && SYMBOL_P(hash_or_sym)) {
+    if (WFIXNUM_P(heap_name) && SYMBOL_P(hash_or_sym)) {
         int heap_idx = FIX2INT(heap_name);
         if (heap_idx < 0 || heap_idx >= HEAP_COUNT) {
             rb_raise(rb_eArgError, "size pool index out of range");

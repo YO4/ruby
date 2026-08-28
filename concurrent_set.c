@@ -176,7 +176,7 @@ concurrent_set_try_resize_without_locking(VALUE old_set_obj, VALUE *set_obj_ptr)
         RUBY_ASSERT(key != CONCURRENT_SET_MOVED);
 
         if (key < CONCURRENT_SET_SPECIAL_VALUE_COUNT) continue;
-        if (!RB_SPECIAL_CONST_P(key) && rb_objspace_garbage_object_p(key)) continue;
+        if (!WSPECIAL_CONST_P(key) && rb_objspace_garbage_object_p(key)) continue;
 
         VALUE hash = rbimpl_atomic_value_load(&old_entry->hash, RBIMPL_ATOMIC_RELAXED) & CONCURRENT_SET_HASH_MASK;
         RUBY_ASSERT(hash != 0);
@@ -276,7 +276,7 @@ rb_concurrent_set_find(VALUE *set_obj_ptr, VALUE key)
 
             goto retry;
           default: {
-            if (UNLIKELY(!RB_SPECIAL_CONST_P(curr_key) && rb_objspace_garbage_object_p(curr_key))) {
+            if (UNLIKELY(!WSPECIAL_CONST_P(curr_key) && rb_objspace_garbage_object_p(curr_key))) {
                 // This is a weakref set, so after marking but before sweeping is complete we may find a matching garbage object.
                 // Skip it and let the GC pass clean it up
                 break;
@@ -399,7 +399,7 @@ start_search:
             // If the continuation bit wasn't set at the start of our search,
             // any concurrent find with the same hash value would also look at
             // this location and try to swap curr_key
-            if (UNLIKELY(!RB_SPECIAL_CONST_P(curr_key) && rb_objspace_garbage_object_p(curr_key))) {
+            if (UNLIKELY(!WSPECIAL_CONST_P(curr_key) && rb_objspace_garbage_object_p(curr_key))) {
                 if (continuation) {
                     goto probe_next;
                 }

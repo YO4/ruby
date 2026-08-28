@@ -2422,7 +2422,7 @@ match_aref(int argc, VALUE *argv, VALUE match)
     rb_scan_args(argc, argv, "11", &idx, &length);
 
     if (NIL_P(length)) {
-        if (FIXNUM_P(idx)) {
+        if (WFIXNUM_P(idx)) {
             return rb_reg_nth_match(FIX2INT(idx), match);
         }
         else {
@@ -2492,7 +2492,7 @@ match_values_at(int argc, VALUE *argv, VALUE match)
     result = rb_ary_new2(argc);
 
     for (i=0; i<argc; i++) {
-        if (FIXNUM_P(argv[i])) {
+        if (WFIXNUM_P(argv[i])) {
             rb_ary_push(result, rb_reg_nth_match(FIX2INT(argv[i]), match));
         }
         else {
@@ -3844,7 +3844,7 @@ match_integer_at(int argc, VALUE *argv, VALUE match)
     int nth;
 
     argc = rb_check_arity(argc, 1, 2);
-    if (FIXNUM_P(idx = argv[0])) {
+    if (WFIXNUM_P(idx = argv[0])) {
         nth = NUM2INT(idx);
     }
     else if ((nth = namev_to_backref_number(match, idx)) < 0) {
@@ -4326,7 +4326,7 @@ reg_extract_args(int argc, VALUE *argv, struct reg_init_args *args)
     else {
         if (!NIL_P(opts)) {
             int f;
-            if (FIXNUM_P(opts)) flags = FIX2INT(opts);
+            if (WFIXNUM_P(opts)) flags = FIX2INT(opts);
             else if ((f = str_to_option(opts)) >= 0) flags = f;
             else if (rb_bool_expected(opts, "ignorecase", FALSE))
                 flags = ONIG_OPTION_IGNORECASE;
