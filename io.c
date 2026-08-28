@@ -894,6 +894,7 @@ io_unread(rb_io_t *fptr, bool discard_rbuf)
   end:
     fptr->rbuf.off = 0;
     fptr->rbuf.len = 0;
+    fptr->rbuf_off_unget = 0;
     clear_codeconv(fptr);
     return;
 }
@@ -909,6 +910,7 @@ io_ungetbyte(VALUE str, rb_io_t *fptr)
         const int min_capa = IO_RBUF_CAPA_FOR(fptr);
         fptr->rbuf.off = 0;
         fptr->rbuf.len = 0;
+        fptr->rbuf_off_unget = 0;
 #if SIZEOF_LONG > SIZEOF_INT
         if (len > INT_MAX)
             rb_raise(rb_eIOError, "ungetbyte failed");
@@ -926,8 +928,11 @@ io_ungetbyte(VALUE str, rb_io_t *fptr)
         MEMMOVE(fptr->rbuf.ptr+fptr->rbuf.capa-fptr->rbuf.len,
                 fptr->rbuf.ptr+fptr->rbuf.off,
                 char, fptr->rbuf.len);
+        fptr->rbuf_off_unget += fptr->rbuf.capa-fptr->rbuf.len-fptr->rbuf.off;
         fptr->rbuf.off = fptr->rbuf.capa-fptr->rbuf.len;
     }
+    if (fptr->rbuf_off_unget < fptr->rbuf.off)
+        fptr->rbuf_off_unget = fptr->rbuf.off;
     fptr->rbuf.off-=(int)len;
     fptr->rbuf.len+=(int)len;
     MEMMOVE(fptr->rbuf.ptr+fptr->rbuf.off, RSTRING_PTR(str), char, len);
@@ -2622,6 +2627,7 @@ io_fill_rbuf(rb_io_t *fptr, bool append)
     if (fptr->rbuf.ptr == NULL) {
         fptr->rbuf.off = 0;
         fptr->rbuf.len = 0;
+        fptr->rbuf_off_unget = 0;
         fptr->rbuf.capa = IO_RBUF_CAPA_FOR(fptr);
         fptr->rbuf.ptr = ALLOC_N(char, fptr->rbuf.capa);
     }
@@ -2711,7 +2717,8 @@ rb_io_eof(VALUE io)
             return Qtrue;
         }
         if (READ_DATA_PENDING(fptr) &&
-            *READ_DATA_PENDING_PTR(fptr) == CTRLZ) {
+            *READ_DATA_PENDING_PTR(fptr) == CTRLZ &&
+            fptr->rbuf.off >= fptr->rbuf_off_unget) {
             return Qtrue;
         }
         return Qfalse;
@@ -3215,8 +3222,9 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
         READ_CHECK(fptr);
         if (io_fill_rbuf(fptr, pending_cr) < 0) {
             if (pending_cr) {
-                fptr->rbuf.off++;
-                fptr->rbuf.len--;
+                fptr->rbuf.off = 0;
+                fptr->rbuf.len = 0;
+                fptr->rbuf_off_unget = 0;
                 *dp = '\r';
                 fptr->cbuf.len++;
                 return MORE_CHAR_SUSPENDED;
@@ -3227,7 +3235,8 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
     }
     ss = sp = (const unsigned char *)fptr->rbuf.ptr + fptr->rbuf.off;
     se = sp + fptr->rbuf.len;
-    if (*sp == CTRLZ) {
+    const unsigned char *rbuf_unget_end = (const unsigned char *)fptr->rbuf.ptr + fptr->rbuf_off_unget;
+    if (*sp == CTRLZ && sp >= rbuf_unget_end) {
         return MORE_CHAR_FINISHED;
     }
     if (fptr->rbuf.len > 1 && *sp == '\r' && *(sp + 1) == '\n') {
@@ -3239,6 +3248,7 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
         fptr->rbuf.off = 0;
         fptr->rbuf.len = 1;
         fptr->rbuf.ptr[fptr->rbuf.off] = '\r';
+        fptr->rbuf_off_unget = 0;
         pending_cr = true;
         goto read_more;
     }
@@ -3247,7 +3257,7 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
     }
 
     while (sp + 1 < se && dp < de) {
-        if (*sp == CTRLZ) {
+        if (*sp == CTRLZ && sp >= rbuf_unget_end) {
             goto end;
         }
         if (*sp == '\r' && *(sp + 1) == '\n') {
@@ -3261,7 +3271,7 @@ fill_cbuf_with_crlf_newline(rb_io_t *fptr, int ec_flags)
             *dp++ = *sp++;
         }
     }
-    if (sp < se && dp < de && *sp != '\r' && *sp != CTRLZ) {
+    if (sp < se && dp < de && *sp != '\r' && (*sp != CTRLZ || sp < rbuf_unget_end)) {
         *dp++ = *sp++;
     }
 
@@ -3306,6 +3316,7 @@ fill_cbuf_with_universal_newline(rb_io_t *fptr, int ec_flags)
             fptr->rbuf.off = 0;
             fptr->rbuf.len = 1;
             fptr->rbuf.ptr[fptr->rbuf.off] = '\r';
+            fptr->rbuf_off_unget = 0;
             pending_cr = true;
             goto read_more;
         }
@@ -3579,15 +3590,16 @@ io_readconv_universal_newline_inplace(unsigned char *ptr, long rend, long conv_l
 #if RUBY_CRLF_ENVIRONMENT
 static long
 io_readconv_crlf_newline_inplace(unsigned char *ptr, long rend, long conv_len,
-                                 long *remains, long *ctrlz)
+                                 long *remains, long *ctrlz, long ctrlz_ungotten_end)
 {
     long sp = conv_len;
     *remains = 0;
     // Locate Ctrl-Z (EOF) once via memchr.
     long cz = -1;
     {
-        if (sp < rend) {
-            unsigned char *pc = memchr(ptr + sp, CTRLZ, (size_t)(rend - sp));
+        long from = sp > ctrlz_ungotten_end ? sp : ctrlz_ungotten_end;
+        if (from < rend) {
+            unsigned char *pc = memchr(ptr + from, CTRLZ, (size_t)(rend - from));
             if (pc) cz = (long)(pc - ptr);
         }
     }
@@ -3740,9 +3752,12 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
                 conv_len = 0;
             }
 
-            // Consume all bytes buffered in rbuf.
-            // The drained bytes are unconverted raw data, which the first
-            // iteration below converts.
+#if RUBY_CRLF_ENVIRONMENT
+            long ctrlz_ungotten_end = 0;
+            if (fptr->rbuf.ptr != NULL && fptr->rbuf.off < fptr->rbuf_off_unget)
+                ctrlz_ungotten_end = conv_len + (fptr->rbuf_off_unget - fptr->rbuf.off);
+#endif
+
             if (fptr->rbuf.len > 0) {
                 io_setstrbuf(&str, conv_len + fptr->rbuf.len);
                 drained = read_buffered_data(RSTRING_PTR(str) + conv_len,
@@ -3784,10 +3799,11 @@ read_all(rb_io_t *fptr, long siz, VALUE str)
                 {
                     conv_len = io_readconv_crlf_newline_inplace(
                         (unsigned char *)RSTRING_PTR(str), end, conv_len,
-                        &remains, &ctrlz);
+                        &remains, &ctrlz, ctrlz_ungotten_end);
                     if (ctrlz >= 0) {
                         io_unread_ctrlz(fptr, str, end, ctrlz);
                     }
+                    ctrlz_ungotten_end = 0;  // ungotten data fully consumed
                 }
 #endif
                 if (cr != ENC_CODERANGE_BROKEN)
@@ -8964,7 +8980,7 @@ rb_io_reopen(int argc, VALUE *argv, VALUE file)
         if (io_fflush(fptr) < 0)
             rb_sys_fail_on_write(fptr);
     }
-    fptr->rbuf.off = fptr->rbuf.len = 0;
+    fptr->rbuf.off = fptr->rbuf.len = fptr->rbuf_off_unget = 0;
     clear_codeconv(fptr);
 
     if (fptr->stdio_file) {
@@ -9886,6 +9902,7 @@ rb_io_fptr_new(void)
     rb_io_buffer_init(&fp->wbuf);
     rb_io_buffer_init(&fp->rbuf);
     rb_io_buffer_init(&fp->cbuf);
+    fp->rbuf_off_unget = 0;
     fp->cbuf_off_unget = 0;
     fp->readconv = NULL;
     fp->writeconv = NULL;

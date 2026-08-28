@@ -336,6 +336,10 @@ struct rb_io {
     RBIMPL_ATTR_DEPRECATED(("with no replacement"))
     rb_io_buffer_t rbuf;
 
+    /** Boundary of ungotten characters in rbuf */
+    RBIMPL_ATTR_DEPRECATED(("with no replacement"))
+    int rbuf_off_unget;
+
     /**
      * Duplex IO object, if set.
      *
