@@ -1,6 +1,7 @@
 #include "ruby/internal/config.h"
 
 #include <signal.h>
+#include <stddef.h>
 #include <string.h>
 
 #ifndef _WIN32
@@ -10913,13 +10914,17 @@ objspace_malloc_increase_body(rb_objspace_t *objspace, void *mem, size_t new_siz
 
 #if defined(_WIN64) && (defined(_M_X64) || defined(__x86_64__))
 /* Windows x64 ABI requires jmp_buf to be 16-byte aligned */
-#define ADDITIONAL_ALIGNMENT 1
+struct alignment_probe {
+    size_t size;  /* 4 words */
+    jmp_buf payload;
+};
+#define NEED_ADDITIONAL_ALIGNMENT
 #endif
 
 struct malloc_obj_info {
     size_t size;  /* 4 words */
-#ifdef ADDITIONAL_ALIGNMENT
-    size_t dummy[ADDITIONAL_ALIGNMENT];
+#ifdef NEED_ADDITIONAL_ALIGNMENT
+    char padding[offsetof(struct alignment_probe, payload) - sizeof(size_t)];
 #endif
 };
 
