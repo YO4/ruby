@@ -185,7 +185,7 @@ jobs:
       - name: configure
         run: >
           ../src/configure --disable-install-doc --prefix=/.
-          --build=$CHOST --host=$CHOST --target=$CHOST
+          --build=$CHOST --host=$CHOST --target=$CHOST DEFS=-DRUBY_DEBUG
         shell: sh
         env:
           CHOST: ${{ env.MSYS2_ARCH }}-w64-mingw32

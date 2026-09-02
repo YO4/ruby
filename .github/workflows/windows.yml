@@ -158,7 +158,7 @@ jobs:
       # TODO: We should use `../src` instead of `D:/a/ruby/ruby/src`
       - name: Configure
         run: >-
-          ../src/win32/configure.bat --disable-install-doc
+          ../src/win32/configure.bat --disable-install-doc DEFS=-DRUBY_DEBUG
           --with-opt-dir=%RUBY_OPT_DIR%
           --with-gmp
 
@@ -324,7 +324,7 @@ jobs:
         run: cl 2>&1 | findstr /c:"Compiler Version ${{ matrix.clver }}"
 
       - name: Configure
-        run: ../src/win32/configure.bat --disable-install-doc
+        run: ../src/win32/configure.bat --disable-install-doc DEFS=-DRUBY_DEBUG
 
       - run: nmake ruby
         timeout-minutes: 50
