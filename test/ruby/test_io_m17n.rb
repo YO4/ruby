@@ -1718,6 +1718,41 @@ EOT
     }
   end
 
+  def test_gets_universal_newline_buffer_boundary
+    with_tmpdir {
+      generate_file("t.boundary", "a" * 8191 + "\r\n" + "b\rX\n")
+      open("t.boundary", "r", newline: :universal) {|f|
+        assert_equal("a" * 8191 + "\n", f.gets)
+        assert_equal("b\n", f.gets)
+        assert_equal("X\n", f.gets)
+      }
+    }
+  end
+
+  def test_gets_universal_newline_buffer_boundary_chomp
+    with_tmpdir {
+      generate_file("t.boundary.crlf.chomp", "a" * 8191 + "\r\n" + "b\n")
+      open("t.boundary.crlf.chomp", "r", newline: :universal) {|f|
+        assert_equal("a" * 8191, f.gets(chomp: true))
+        assert_equal("b", f.gets(chomp: true))
+        assert_equal(nil, f.gets(chomp: true))
+      }
+
+      generate_file("t.boundary.cr.x", "a" * 8191 + "\r" + "X\nb\n")
+      open("t.boundary.cr.x", "r", newline: :universal) {|f|
+        assert_equal("a" * 8191, f.gets(chomp: true))
+        assert_equal("X", f.gets(chomp: true))
+        assert_equal("b", f.gets(chomp: true))
+      }
+
+      generate_file("t.boundary.cr.eof", "a" * 8191 + "\r")
+      open("t.boundary.cr.eof", "r", newline: :universal) {|f|
+        assert_equal("a" * 8191, f.gets(chomp: true))
+        assert_equal(nil, f.gets(chomp: true))
+      }
+    }
+  end
+
   def test_read_newline_conversion_with_encoding_conversion
     with_tmpdir {
       generate_file("t.utf8.crlf", "a\r\nb\r\n")

@@ -4481,6 +4481,176 @@ rb_io_getline_fast(rb_io_t *fptr, rb_encoding *enc, int chomp)
     return str;
 }
 
+static VALUE
+rb_io_getline_fast_with_conv(rb_io_t *fptr, rb_encoding *enc, int chomp)
+{
+    VALUE str = Qnil;
+    int len = 0;
+    long pos = 0;
+    int cr = 0;
+    int chomplen = 0;
+    int convlen = 0;
+    const bool crlf = USE_CRLF_NEWLINE_FASTPATH_ON_READ(fptr);
+    const bool universal = !crlf;
+    int preconv_len = 0;
+    int pending_cr = 0;
+    int shrinkable = 0;
+    bool found_in_cbuf = false;
+
+    if (READ_CHAR_PENDING(fptr)) {
+        int take = READ_CHAR_PENDING_COUNT(fptr);
+        int grow = take;
+        const char *cbuf_ptr = READ_CHAR_PENDING_PTR(fptr);
+        const char *e_c = memchr(cbuf_ptr, '\n', take);
+        if (e_c) {
+            take = (int)(e_c - cbuf_ptr + 1);
+            found_in_cbuf = true;
+            if (chomp) {
+                chomplen = (take > 1 && *(e_c - 1) == '\r') + 1;
+            }
+            grow = take - chomplen;
+        }
+        else {
+            shrinkable = 1;
+        }
+        str = rb_str_new(cbuf_ptr, grow);
+        fptr->cbuf.off += take;
+        fptr->cbuf.len -= take;
+        len = grow;
+        pos += rb_str_coderange_scan_restartable(RSTRING_PTR(str) + pos, RSTRING_PTR(str) + len, enc, &cr);
+        /* cbuf is already newline-converted, so exclude it from rbuf newline conversion. */
+        preconv_len = len;
+    }
+
+    if (!found_in_cbuf) do {
+        int pending = READ_DATA_PENDING_COUNT(fptr);
+
+        if (pending > 0) {
+            const char *p = READ_DATA_PENDING_PTR(fptr);
+            const char *e = NULL;
+            int take, grow;
+
+            if (pending_cr && *p != '\n') {
+                /* The previous buffer ended with a standalone CR. */
+                break;
+            }
+#if RUBY_CRLF_ENVIRONMENT
+            if (crlf) {
+                if (*p == CTRLZ && fptr->rbuf_off_unget <= fptr->rbuf.off) {
+                    break;
+                }
+                /* Find the first \n or Ctrl-Z */
+                const char *q = p, *qe = p + pending, *qz = p + fptr->rbuf_off_unget - fptr->rbuf.off;
+                while (q < qz && *q != '\n')
+                    q++;
+                while (q < qe && *q != '\n' && *q != CTRLZ)
+                    q++;
+                if (q < qe)
+                    /* will not reach here if (*p == CTRLZ) */
+                    e = (*q == CTRLZ) ? q - 1 : q;
+            }
+            else
+#endif
+            /* universal */ {
+                /* Find the first \r or \n */
+                const char *q = p, *qe = p + pending;
+                while (q < qe && *q != '\r' && *q != '\n')
+                    q++;
+                if (q < qe) {
+                    if (*q == '\r') {
+                        if (q == qe - 1)
+                            /* A trailing \r may pair with the next byte */
+                            pending_cr = 1;
+                        else
+                            e = (q[1] == '\n') ? q + 1 : q;
+                    }
+                    else
+                        e = q;
+                }
+            }
+            take = grow = pending;
+            if (e) {
+                take = (int)(e - p + 1);
+                if (chomp) {
+                    chomplen = (take > 1 && *(e-1) == '\r') + 1;
+                }
+                else {
+                    convlen = (take > 1 && *(e-1) == '\r' && *e == '\n');
+                }
+                grow = take - chomplen - convlen;
+            }
+            if (NIL_P(str)) {
+                str = rb_str_new(p, grow);
+                if (!e)
+                    shrinkable = 1;
+            }
+            else {
+                /* This expands the capacity by 2**n when necessary. */
+                rb_str_buf_cat(str, p, grow);
+            }
+            fptr->rbuf.off += take;
+            fptr->rbuf.len -= take;
+            len += grow;
+            if (e) break;
+            if (cr != ENC_CODERANGE_BROKEN)
+                pos += rb_str_coderange_scan_restartable(RSTRING_PTR(str) + pos, RSTRING_PTR(str) + len - pending_cr, enc, &cr);
+        }
+        READ_CHECK(fptr);
+    } while (io_fillbuf(fptr) >= 0);
+    if (NIL_P(str)) return Qnil;
+
+    if (chomplen == 2) {
+        if (crlf && len - preconv_len >= 1 &&
+            /* \r | \r\n */
+            RSTRING_PTR(str)[len-1] == '\r') {
+            rb_str_set_len(str, --len);
+        }
+    }
+    else if (chomplen == 1) {
+        if (crlf && len - preconv_len >= 2 &&
+            /* \r\r | \n */
+            RSTRING_PTR(str)[len-2] == '\r' && RSTRING_PTR(str)[len-1] == '\r') {
+            rb_str_set_len(str, len - 2);
+            len -= 2;
+        }
+        else if (len - preconv_len >= 1 &&
+            /* \r | \n */
+            RSTRING_PTR(str)[len-1] == '\r') {
+            rb_str_set_len(str, --len);
+        }
+    }
+    else if (convlen && len - preconv_len >= 1 &&
+        RSTRING_PTR(str)[len-1] == '\r') {
+        /* \r trimmed\n -> \n */
+        RSTRING_PTR(str)[len-1] = '\n';
+    }
+    else if (universal && len - preconv_len >= 1 &&
+        RSTRING_PTR(str)[len-1] == '\r') {
+        if (chomp) {
+            /* lone \r -> \n trimmed */
+            rb_str_set_len(str, --len);
+        }
+        else {
+            /* lone \r -> \n */
+            RSTRING_PTR(str)[len-1] = '\n';
+        }
+    }
+    else if (len - preconv_len >= 2 &&
+        RSTRING_PTR(str)[len-2] == '\r' && RSTRING_PTR(str)[len-1] == '\n') {
+        RSTRING_PTR(str)[len-2] = '\n';
+        rb_str_set_len(str, --len);
+    }
+
+    if (cr != ENC_CODERANGE_BROKEN && pos < len)
+        pos += rb_str_coderange_scan_restartable(RSTRING_PTR(str) + pos, RSTRING_PTR(str) + len, enc, &cr);
+    if (shrinkable) io_shrink_read_string(str, RSTRING_LEN(str));
+    str = io_enc_str(str, fptr);
+    ENC_CODERANGE_SET(str, cr);
+    fptr->lineno++;
+
+    return str;
+}
+
 struct getline_arg {
     VALUE io;
     VALUE rs;
@@ -4585,6 +4755,12 @@ rb_io_getline_0(VALUE rs, long limit, int chomp, rb_io_t *fptr)
     else if (rs == rb_default_rs && limit < 0 && !NEED_READCONV(fptr) &&
              rb_enc_asciicompat(enc = io_read_encoding(fptr))) {
         return rb_io_getline_fast(fptr, enc, chomp);
+    }
+    else if (rs == rb_default_rs && limit < 0 &&
+             (USE_UNIVERSAL_NEWLINE_FASTPATH_ON_READ(fptr) ||
+              USE_CRLF_NEWLINE_FASTPATH_ON_READ(fptr)) &&
+             rb_enc_asciicompat(enc = io_read_encoding(fptr))) {
+        return rb_io_getline_fast_with_conv(fptr, enc, chomp);
     }
     else {
         int c, newline = -1;
