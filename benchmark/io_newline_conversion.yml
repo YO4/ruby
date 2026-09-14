@@ -113,3 +113,39 @@ benchmark:
     script: |
       $dense_newline_defaultmode.rewind
       $dense_newline_defaultmode.readlines
+  - name: getc_binary_no_newline
+    script: |
+      $no_newline_binarymode.rewind
+      1000.times { $no_newline_binarymode.getc }
+  - name: getc_text_no_newline
+    script: |
+      $no_newline_textmode.rewind
+      1000.times { $no_newline_textmode.getc }
+  - name: getc_default_no_newline
+    script: |
+      $no_newline_defaultmode.rewind
+      1000.times { $no_newline_defaultmode.getc }
+  - name: getc_binary_sparse_newline
+    script: |
+      $sparse_newline_binarymode.rewind
+      1000.times { $sparse_newline_binarymode.getc }
+  - name: getc_text_sparse_newline
+    script: |
+      $sparse_newline_textmode.rewind
+      1000.times { $sparse_newline_textmode.getc }
+  - name: getc_default_sparse_newline
+    script: |
+      $sparse_newline_defaultmode.rewind
+      1000.times { $sparse_newline_defaultmode.getc }
+  - name: getc_binary_dense_newline
+    script: |
+      $dense_newline_binarymode.rewind
+      1000.times { $dense_newline_binarymode.getc }
+  - name: getc_text_dense_newline
+    script: |
+      $dense_newline_textmode.rewind
+      1000.times { $dense_newline_textmode.getc }
+  - name: getc_default_dense_newline
+    script: |
+      $dense_newline_defaultmode.rewind
+      1000.times { $dense_newline_defaultmode.getc }
