@@ -470,6 +470,66 @@ class TestIO < Test::Unit::TestCase
     end
   end
 
+  def test_gets_ctrlz_eof_in_text_mode
+    omit unless /mingw|mswin/ =~ RUBY_PLATFORM
+
+    mkcdtmpdir do
+      File.binwrite("ctrlz_gets.txt", "abc\r\ndef\x1aghij\r\nklm\r\n")
+      File.open("ctrlz_gets.txt", "r") do |f|
+        assert_equal("abc\n", f.gets)
+        assert_equal("def", f.gets)
+        assert_nil(f.gets)
+        assert_predicate(f, :eof?)
+        assert_equal(0x1a, f.getbyte)
+        assert_equal("ghij\n", f.gets)
+        assert_equal("klm\n", f.gets)
+        assert_nil(f.gets)
+      end
+
+      File.binwrite("ctrlz_gets_boundary.txt", "a" * 8191 + "\r\ndef\x1aghij")
+      File.open("ctrlz_gets_boundary.txt", "r") do |f|
+        assert_equal("a" * 8191 + "\n", f.gets)
+        assert_equal("def", f.gets)
+        assert_nil(f.gets)
+        assert_predicate(f, :eof?)
+        assert_equal(0x1a, f.getbyte)
+        assert_equal("ghij", f.gets)
+      end
+
+      # A Ctrl-Z pushed back with ungetbyte is not treated as EOF.
+      File.binwrite("ctrlz_gets_unget.txt", "abc")
+      File.open("ctrlz_gets_unget.txt", "r") do |f|
+        f.ungetbyte(0x1a)
+        assert_equal("\x1aabc", f.gets)
+      end
+
+      # gets(chomp: true) terminated by Ctrl-Z must not strip data.
+      # Ctrl-Z is EOF, not a newline, so chomp leaves the string as-is
+      # (matching slow-path semantics verified on ruby 3.4).
+      File.binwrite("ctrlz_gets_chomp.txt", "ab\x1aghij")
+      File.open("ctrlz_gets_chomp.txt", "r") do |f|
+        assert_equal("ab", f.gets(chomp: true))
+        assert_nil(f.gets(chomp: true))
+      end
+      File.binwrite("ctrlz_gets_chomp1.txt", "a\x1a")
+      File.open("ctrlz_gets_chomp1.txt", "r") do |f|
+        assert_equal("a", f.gets(chomp: true))
+        assert_equal("a", File.open("ctrlz_gets_chomp1.txt", "r") {|g| g.gets })
+      end
+      File.binwrite("ctrlz_gets_chomp_cr.txt", "def\r\x1aghij")
+      File.open("ctrlz_gets_chomp_cr.txt", "r") do |f|
+        assert_equal("def\r", f.gets(chomp: true))
+        assert_equal("def\r", File.open("ctrlz_gets_chomp_cr.txt", "r") {|g| g.gets })
+      end
+      File.binwrite("ctrlz_gets_chomp_crlf.txt", "abc\r\ndef\x1aghij")
+      File.open("ctrlz_gets_chomp_crlf.txt", "r") do |f|
+        assert_equal("abc", f.gets(chomp: true))
+        assert_equal("def", f.gets(chomp: true))
+        assert_nil(f.gets(chomp: true))
+      end
+    end
+  end
+
   def test_getbyte_after_rewind_with_pending_char
     bug22239 = '[Bug #22239]'
     make_tempfile {|t|
