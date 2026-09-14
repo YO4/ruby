@@ -4606,12 +4606,22 @@ rb_io_getline_fast_with_conv(rb_io_t *fptr, rb_encoding *enc, int chomp)
             }
 #if RUBY_CRLF_ENVIRONMENT
             if (crlf) {
-                /* Find the first \n */
-                const char *q = p, *qe = p + pending;
-                while (q < qe && *q != '\n')
+                if (*p == CTRLZ && fptr->rbuf_off_unget <= fptr->rbuf.off) {
+                    break;
+                }
+                // Find the first \n or Ctrl-Z
+                const char *q = p, *qe = p + pending, *qz = p + fptr->rbuf_off_unget - fptr->rbuf.off;
+                while (q < qz && *q != '\n')
                     q++;
-                if (q < qe)
+                while (q < qe && *q != '\n' && *q != CTRLZ)
+                    q++;
+                if (q < qe) {
+                    // will not reach here if (*p == CTRLZ)
                     e = q;
+                    if (*q == CTRLZ) {
+                        pending = (int)(e - p);
+                    }
+                }
             }
             else
 #endif
@@ -4634,14 +4644,19 @@ rb_io_getline_fast_with_conv(rb_io_t *fptr, rb_encoding *enc, int chomp)
             }
             take = grow = pending;
             if (e) {
-                take = (int)(e - p + 1);
-                if (chomp) {
-                    chomplen = (take > 1 && *(e-1) == '\r') + 1;
+#if RUBY_CRLF_ENVIRONMENT
+                if (*e != CTRLZ)
+#endif
+                {
+                    take = (int)(e - p + 1);
+                    if (chomp) {
+                        chomplen = (take > 1 && *(e-1) == '\r') + 1;
+                    }
+                    else {
+                        convlen = (take > 1 && *(e-1) == '\r' && *e == '\n');
+                    }
+                    grow = take - chomplen - convlen;
                 }
-                else {
-                    convlen = (take > 1 && *(e-1) == '\r' && *e == '\n');
-                }
-                grow = take - chomplen - convlen;
             }
             if (NIL_P(str)) {
                 str = rb_str_new(p, grow);
