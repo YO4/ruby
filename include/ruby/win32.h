@@ -333,7 +333,9 @@ extern void rb_w32_spawnspec_addclose(struct rb_w32_spawnspec *actions, int fd);
 extern void rb_w32_spawnspec_adddup2(struct rb_w32_spawnspec *actions,
                                          int oldfd, int newfd);
 extern void rb_w32_spawnspec_adddup2_child(struct rb_w32_spawnspec *actions,
-                                               int oldfd, int newfd);
+                                                int oldfd, int newfd);
+extern void rb_w32_spawnspec_set_close_others(struct rb_w32_spawnspec *actions,
+                                                  int close_others_do);
 
 extern rb_pid_t rb_w32_uaspawn_spec(int mode, const char *prog, char *const *argv,
                                        DWORD flags,

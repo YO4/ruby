@@ -2784,6 +2784,7 @@ struct rb_w32_fd_pair {
 
 struct rb_w32_spawnspec {
     int close_others_maxhint;
+    int close_others_do;
     int fd_close_count;
     int fd_close_cap;
     int *fd_close;
@@ -2866,39 +2867,27 @@ rb_w32_spawnspec_adddup2(struct rb_w32_spawnspec *actions,
 
 void
 rb_w32_spawnspec_adddup2_child(struct rb_w32_spawnspec *actions,
-                                   int oldfd, int newfd)
+                                    int oldfd, int newfd)
 {
     spawnspec_add_pair(actions, &actions->fd_dup2_child,
                            &actions->fd_dup2_child_count, &actions->fd_dup2_child_cap,
                            oldfd, newfd);
 }
 
-/*
- * Build the lpReserved2 buffer consumed by the child's C runtime startup code
- * (see UCRT source exec/spawnv.cpp:accumulate_inheritable_handles and
- * lowio/ioinit.cpp:initialize_inherited_file_handles_nolock).  The buffer
- * layout is:
- *
- *   [0..3]            int handle_count
- *   [4..4+N-1]        unsigned char osfile[N]
- *   [4+N..4+N+8*N-1]  intptr_t handle[N]
- *
- * Entries whose handle is INVALID_HANDLE_VALUE, or whose osfile does not have
- * FOPEN set, are emitted as osfile=0 / handle=INVALID_HANDLE_VALUE and skipped
- * by the child.  The buffer is built directly from the logical redirection
- * requests (struct rb_w32_spawnspec): the scan of every open fd and all
- * the FNOINHERIT handling happen here, so the rest of the spawn path only ever
- * sees this opaque byte buffer and never the CRT-internal handle/osfile
- * details.  (CreateChild reads the per-fd handle/osfile back out of the same
- * buffer to resolve the standard handles and the inheritable handle list.)
- *
- * Returns a malloc()'d buffer and stores its size in *cbReserved2_out.
- * Returns NULL with *cbReserved2_out == 0 when there is nothing to inherit
- * (max_fd < 0).  On malloc() failure returns NULL with errno set to ENOMEM.
- * The caller must free() the returned buffer.  The caller must hold the GVL so
- * that another Ruby thread cannot open/close/toggle close_on_exec on a fd
- * concurrently while the scan runs.
- */
+/* :close_others support: drop non-redirected fds >= 3, like Unix
+ * rb_close_before_exec (default keeps cloexec=false fds inheritable). */
+void
+rb_w32_spawnspec_set_close_others(struct rb_w32_spawnspec *actions,
+                                      int close_others_do)
+{
+    actions->close_others_do = close_others_do ? 1 : 0;
+}
+
+/* Build the lpReserved2 inherit table the child CRT parses (UCRT
+ * accumulate_inheritable_handles): int count, osfile[N], handle[N].
+ * Skipped entries use INVALID_HANDLE_VALUE/osfile 0.  Returns malloc'd
+ * buffer (caller frees); NULL with errno on failure, or NULL/0-size when
+ * empty.  Caller must hold the GVL. */
 static BYTE *
 make_lpReserved2(const struct rb_w32_spawnspec *actions,
                  WORD *cbReserved2_out)
@@ -2939,14 +2928,8 @@ make_lpReserved2(const struct rb_w32_spawnspec *actions,
         p_handle[i] = (intptr_t)INVALID_HANDLE_VALUE;
     }
 
-    /* Step 1: snapshot every open fd's handle + osfile, regardless of the
-     * close_on_exec (FNOINHERIT) flag.  Unopened fds remain
-     * INVALID_HANDLE_VALUE from the initialization above and are ignored by
-     * later steps.  The FNOINHERIT flag is preserved here and stripped in
-     * Step 4: every fd that is not explicitly redirected (redirect targets
-     * have FNOINHERIT cleared in Step 3) is therefore dropped from the child,
-     * matching Unix's close_on_exec semantics without special-casing the
-     * flag during the spawn. */
+    /* Step 1: snapshot every open fd (FNOINHERIT preserved for Step 4).
+     * Unopened fds stay INVALID and are ignored later. */
     for (int fd = 0; fd < count; fd++) {
         unsigned char of = rb_w32_get_osfile(fd);
         if (!(of & FOPEN))
@@ -2958,9 +2941,43 @@ make_lpReserved2(const struct rb_w32_spawnspec *actions,
         p_flags[fd] = of;
     }
 
-    /* Step 2: fd_close removes the matching entries.  The parent's fd is NOT
-     * closed (unlike the Unix path where exec inherits and then closes); the
-     * child simply will not see it. */
+    /* Step 2: apply fd_dup2 redirects, reading every source from a snapshot
+     * so overlapping entries still see original values (as run_exec_dup2
+     * orders real dup2 calls).  A single pass suffices. */
+    intptr_t *snap_handle = (intptr_t *)malloc((size_t)count * sizeof(intptr_t));
+    unsigned char *snap_flags = (unsigned char *)malloc((size_t)count);
+    if (!snap_handle || !snap_flags) {
+        free(snap_handle);
+        free(snap_flags);
+        free(reserved2);
+        errno = ENOMEM;
+        return NULL;
+    }
+    memcpy(snap_handle, p_handle, (size_t)count * sizeof(intptr_t));
+    memcpy(snap_flags, p_flags, (size_t)count);
+    for (int i = 0; i < actions->fd_dup2_count; i++) {
+        int oldfd = actions->fd_dup2[i].oldfd;
+        int newfd = actions->fd_dup2[i].newfd;
+
+        if (oldfd < 0 || oldfd >= count ||
+            snap_handle[oldfd] == (intptr_t)INVALID_HANDLE_VALUE ||
+            !(snap_flags[oldfd] & FOPEN))
+            continue;
+        if (newfd < 0 || newfd >= count)
+            continue;
+
+        unsigned char of = snap_flags[oldfd] & ~FNOINHERIT;
+        if (p_handle[newfd] == snap_handle[oldfd] && p_flags[newfd] == of)
+            continue;
+
+        p_handle[newfd] = snap_handle[oldfd];
+        p_flags[newfd] = of;
+    }
+    free(snap_handle);
+    free(snap_flags);
+
+    /* Step 3: hide fd_close entries from the child (after dup2, matching
+     * Unix's fd_dup2-then-fd_close order, e.g. 1=>3, 3=>:close). */
     for (int i = 0; i < actions->fd_close_count; i++) {
         int cfd = actions->fd_close[i];
         if (cfd >= 0 && cfd < count) {
@@ -2969,37 +2986,8 @@ make_lpReserved2(const struct rb_w32_spawnspec *actions,
         }
     }
 
-    /* Step 3: fd_dup2 describes redirections [oldfd, newfd].  Copy the source
-     * (handle, osfile) into the new position.  No dup() is required: the
-     * child's CRT will receive fd newfd backed by the same HANDLE as oldfd.
-     * Because Step 1 already registered every open fd (including
-     * close_on_exec ones), the source is always present, so the parent's own
-     * file descriptors are never consulted here.  FNOINHERIT is cleared on the
-     * target so the redirect is inherited by the child regardless of the
-     * source's close_on_exec state. */
-    for (int i = 0; i < actions->fd_dup2_count; i++) {
-        int oldfd = actions->fd_dup2[i].oldfd;
-        int newfd = actions->fd_dup2[i].newfd;
-
-        if (oldfd < 0 || oldfd >= count ||
-            p_handle[oldfd] == (intptr_t)INVALID_HANDLE_VALUE ||
-            !(p_flags[oldfd] & FOPEN))
-            continue;
-        if (newfd < 0 || newfd >= count)
-            continue;
-
-        p_handle[newfd] = p_handle[oldfd];
-        p_flags[newfd] = p_flags[oldfd] & ~FNOINHERIT;
-    }
-
-    /* fd_dup2_child entries are "self dups" resolved within the child: the
-     * new fd should duplicate the child's own oldfd.  Because oldfd may
-     * itself be the target of another redirect (e.g. STDERR=>[:child,3],
-     * 3=>[:child,4], 4=>[:child,STDOUT]), the chain is resolved by
-     * repeatedly copying the already-resolved child fd mapping until it is
-     * stable.  The source fd is read from the buffer only (it is present
-     * thanks to Step 1), so the parent's own descriptors are never consulted.
-     * Cycles are impossible here: they are rejected at parse time. */
+    /* fd_dup2_child ("self dups") chains resolve within the child by
+     * fixpoint; sources come from the buffer only (cycles rejected). */
     {
         int changed;
         do {
@@ -3018,14 +3006,10 @@ make_lpReserved2(const struct rb_w32_spawnspec *actions,
                 if (h == (intptr_t)INVALID_HANDLE_VALUE || !(of & FOPEN))
                     continue;   /* source not (yet) available */
 
-                /* Clear FNOINHERIT on the target: the redirect target is
-                 * inherited by the child regardless of the source's
-                 * close_on_exec state. */
+                /* Targets stay inheritable regardless of close_on_exec. */
                 of &= ~FNOINHERIT;
 
-                /* Allow overriding a value set by the implicit scan (e.g. a
-                 * stdio fd redirected via [:child, ...]); only skip when the
-                 * entry is already correct so the loop can terminate. */
+                /* Overriding is idempotent; skip settled entries. */
                 if (p_handle[newfd] == h && p_flags[newfd] == of)
                     continue;
 
@@ -3036,20 +3020,46 @@ make_lpReserved2(const struct rb_w32_spawnspec *actions,
         } while (changed);
     }
 
-    /* Step 4: strip every fd that is still marked FNOINHERIT.  These are the
-     * close_on_exec fds that were not explicitly redirected (redirect targets
-     * had FNOINHERIT cleared in Step 3), so the child must not see them.  This
-     * is the inverse of the old Step 1 exclusion: the buffer is left free of
-     * FNOINHERIT entries, so the spawn path no longer needs to special-case
-     * the flag. */
+    /* Step 4: drop fds >= 3 that are not redirect targets when close_others
+     * is set, and any entry still marked FNOINHERIT. */
+    unsigned char *keep_fd = NULL;
+    if (actions->close_others_do) {
+        keep_fd = (unsigned char *)calloc((size_t)count, 1);
+        if (!keep_fd) {
+            free(reserved2);
+            errno = ENOMEM;
+            return NULL;
+        }
+        if (count > 0) keep_fd[0] = 1;
+        if (count > 1) keep_fd[1] = 1;
+        if (count > 2) keep_fd[2] = 1;
+        for (int i = 0; i < actions->fd_dup2_count; i++) {
+            int newfd = actions->fd_dup2[i].newfd;
+            if (newfd >= 0 && newfd < count)
+                keep_fd[newfd] = 1;
+        }
+        for (int i = 0; i < actions->fd_dup2_child_count; i++) {
+            int newfd = actions->fd_dup2_child[i].newfd;
+            if (newfd >= 0 && newfd < count)
+                keep_fd[newfd] = 1;
+        }
+    }
+
     for (int fd = 0; fd < count; fd++) {
         if (p_handle[fd] == (intptr_t)INVALID_HANDLE_VALUE)
             continue;
+        if (keep_fd && fd >= 3 && !keep_fd[fd]) {
+            p_handle[fd] = (intptr_t)INVALID_HANDLE_VALUE;
+            p_flags[fd] = 0;
+            continue;
+        }
         if (p_flags[fd] & FNOINHERIT) {
             p_handle[fd] = (intptr_t)INVALID_HANDLE_VALUE;
             p_flags[fd] = 0;
         }
     }
+
+    free(keep_fd);
 
     *cbReserved2_out = (WORD)total_size;
     return reserved2;
@@ -3250,11 +3260,18 @@ build_attribute_list(struct rb_w32_inherit_state *st, HANDLE hPseudoConsole)
 
   fail_free:
     errno = map_errno(GetLastError());
-    for (int i = 0; i < st->forced_count; i++)
-        SetHandleInformation(st->forced[i], HANDLE_FLAG_INHERIT, 0);
     DeleteProcThreadAttributeList(attrlist);
     free(attrlist);
+    /* fall through to fail_nomem */
   fail_nomem:
+    /* Revert the inherit flag on handles we forced inheritable in
+     * prepare_inheritable_handle_list.  Both the fail_free path (after a
+     * CreateProcThreadAttributeList/UpdateProcThreadAttribute failure) and
+     * the malloc(attrlist) failure (which skips fail_free) reach here, so the
+     * revert must run from fail_nomem or the handles would stay inheritable
+     * for the rest of the process and leak into every subsequent spawn. */
+    for (int i = 0; i < st->forced_count; i++)
+        SetHandleInformation(st->forced[i], HANDLE_FLAG_INHERIT, 0);
     free(st->keep);
     free(st->forced);
     st->keep = st->forced = NULL;

@@ -880,6 +880,28 @@ class TestProcess < Test::Unit::TestCase
     }
   end
 
+  def test_execopts_redirect_dup2_overlap
+    with_pipe {|r0, w0|
+      with_pipe {|r1, w1|
+        with_pipe {|r2, w2|
+          # A newfd overlapping another entry's oldfd must still receive the
+          # original value (snapshot semantics, as run_exec_dup2 orders dup2).
+          n0, n1, n2 = r0.fileno, r1.fileno, w1.fileno
+          h = {n0 => w0, n1 => w1, n2 => w2}
+          pid = spawn(RUBY, "-e",
+                      "[#{n0},#{n1},#{n2}].each {|fd| IO.new(fd, 'w').puts fd }", h)
+          w0.close
+          w1.close
+          w2.close
+          assert_equal("#{n0}\n", r0.gets)
+          assert_equal("#{n1}\n", r1.gets)
+          assert_equal("#{n2}\n", r2.gets)
+          Process.wait(pid)
+        }
+      }
+    }
+  end
+
   def test_execopts_exec
     with_tmpchdir {|d|
       File.write("s", 'exec "echo aaa", STDOUT=>"foo"')
