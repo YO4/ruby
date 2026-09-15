@@ -1213,6 +1213,12 @@ struct rb_w32_spawnspec {
     int fd_dup2_child_cap;
     struct rb_w32_fd_pair *fd_dup2_child;
 
+    /* Pseudoconsole for PTY.spawn, attached via PSEUDOCONSOLE attribute.
+     * Not owned here; the creator closes it.  Unredirected std streams
+     * come from the conpty itself. */
+    int enable_pty;
+    HANDLE hPseudoConsole;
+
     /* UTF-16LE child environment block for CreateProcessW (NULL = inherit).
      * Owned here; freed by rb_w32_spawnspec_destroy. */
     WCHAR *env_block;
@@ -1230,8 +1236,8 @@ struct rb_w32_spawnspec {
     int new_pgroup;
 };
 
-/* Per-spawn state for CreateChild: lpReserved2 buffer, resolved std handles
- * and handle-list scratch. */
+/* Per-spawn state consumed by CreateChild: lpReserved2 buffer, resolved std
+ * handles, handle-list scratch and the optional pseudoconsole handle. */
 struct rb_w32_inherit_state {
     BYTE *reserved2;            /* malloc'd lpReserved2 buffer (or NULL) */
     WORD cbReserved2;
@@ -1252,6 +1258,10 @@ struct rb_w32_inherit_state {
     HANDLE *duped;
     int duped_count;
 
+    /* Pseudoconsole from rb_w32_spawnspec_enable_pty (NULL if none).
+     * Referenced only; owned by the creator. */
+    HANDLE hPseudoConsole;
+
     /* UTF-16LE child environment block from rb_w32_spawnspec_addenv (NULL =
      * inherit).  Referenced only; freed by rb_w32_spawnspec_destroy. */
     const WCHAR *env_block;
@@ -1270,7 +1280,7 @@ static int prepare_inherit_state(const struct rb_w32_spawnspec *actions,
                                  HANDLE hInput, HANDLE hOutput, HANDLE hError,
                                  struct rb_w32_inherit_state *st);
 static int prepare_inheritable_handle_list(struct rb_w32_inherit_state *st);
-static LPPROC_THREAD_ATTRIBUTE_LIST build_attribute_list(struct rb_w32_inherit_state *st, HANDLE hPseudoConsole);
+static LPPROC_THREAD_ATTRIBUTE_LIST build_attribute_list(struct rb_w32_inherit_state *st);
 
 /* License: Ruby's */
 static int
@@ -1324,10 +1334,10 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
     aStartupInfo.hStdOutput = st.hStd[1];
     aStartupInfo.hStdError = st.hStd[2];
 
-    /* Hand explicit std handles to the child via STARTF_USESTDHANDLES.
-     * An explicitly closed fd keeps NULL hStd (no GetStdHandle fallback)
-     * so the child sees it closed. */
-    if (st.use_std_handles)
+    /* USESTDHANDLES for explicit redirects, and for pure conpty spawns: with
+     * NULL hStd it stops the kernel duplicating our (possibly redirected)
+     * std handles into the child, so the conpty serves its stdio. */
+    if (st.use_std_handles || st.hPseudoConsole)
         aStartupInfo.dwFlags = STARTF_USESTDHANDLES;
 
     dwCreationFlags |= NORMAL_PRIORITY_CLASS;
@@ -1350,9 +1360,9 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
         return FALSE;
     }
 
-    /* Inherit exactly the table handles via HANDLE_LIST, so no other parent
-     * handle leaks into the child (e.g. blocking EOF).  bInheritHandle stays
-     * TRUE for the child's CRT to honour the std handles. */
+    /* Inherit exactly the table handles (HANDLE_LIST), and/or attach the
+     * pseudoconsole.  With neither, the child inherits nothing and gets
+     * stdio from the conpty. */
     sa.bInheritHandle = TRUE;
 
     /* List the table handles plus handed-over std handles (also covering the
@@ -1366,21 +1376,26 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
             child->pid = 0;
             return FALSE;       /* errno == ENOMEM */
         }
-        if (st.keep_count == 0) {
-            /* Nothing to inherit: make sure the child inherits no handle. */
+    }
+
+    if (st.keep_count > 0 || st.hPseudoConsole) {
+        attrlist = build_attribute_list(&st);
+        if (!attrlist) {
+            for (int i = 0; i < st.duped_count; i++)
+                CloseHandle(st.duped[i]);
+            free(st.duped);
+            free(st.reserved2);
+            child->pid = 0;
+            return FALSE;       /* errno set by build_attribute_list */
+        }
+        /* A list restricts inheritance to its handles (bInheritHandle stays
+         * TRUE); with no list (pure conpty) inherit nothing. */
+        if (st.keep_count == 0)
             sa.bInheritHandle = FALSE;
-        }
-        else {
-            attrlist = build_attribute_list(&st, NULL);
-            if (!attrlist) {
-                for (int i = 0; i < st.duped_count; i++)
-                    CloseHandle(st.duped[i]);
-                free(st.duped);
-                free(st.reserved2);
-                child->pid = 0;
-                return FALSE;   /* errno set by build_attribute_list */
-            }
-        }
+    }
+    else {
+        /* Nothing to inherit: make sure the child inherits no handle. */
+        sa.bInheritHandle = FALSE;
     }
 
     memset(&aStartupInfoEx, 0, sizeof(aStartupInfoEx));
@@ -2880,6 +2895,15 @@ rb_w32_spawnspec_destroy(struct rb_w32_spawnspec *actions)
     xfree(actions);
 }
 
+void
+rb_w32_spawnspec_enable_pty(struct rb_w32_spawnspec *actions,
+                                HANDLE hPseudoConsole)
+{
+    if (!actions) return;
+    actions->enable_pty = 1;
+    actions->hPseudoConsole = hPseudoConsole;
+}
+
 /* Build the UTF-16LE child environment block for CreateProcessW from the
  * UTF-8 "KEY=VALUE" list.  envp==NULL resets to inherit; an entry-less
  * block gets SystemRoot (CreateProcessW rejects empty blocks). */
@@ -3327,7 +3351,7 @@ make_lpReserved2(const struct rb_w32_spawnspec *actions,
 }
 
 
-/* True if fd is an explicit dup2/close target. */
+/* True if fd is an explicit dup2/close target (i.e. not conpty-backed). */
 static int
 spawnspec_targets_fd(const struct rb_w32_spawnspec *actions, int fd)
 {
@@ -3342,15 +3366,34 @@ spawnspec_targets_fd(const struct rb_w32_spawnspec *actions, int fd)
     return 0;
 }
 
-/* Fill *st from the spawnspec: lpReserved2 buffer and resolved std handles.
- * Returns 0 with errno set on failure.  Caller must hold the GVL and
- * later free st->reserved2. */
+/* True if any fd >= 3 is redirected/closed (pure conpty keeps the table then). */
+static int
+spawnspec_has_nonstd_redirect(const struct rb_w32_spawnspec *actions)
+{
+    int i;
+    if (!actions) return 0;
+    for (i = 0; i < actions->fd_dup2_count; i++)
+        if (actions->fd_dup2[i].newfd >= 3) return 1;
+    for (i = 0; i < actions->fd_dup2_child_count; i++)
+        if (actions->fd_dup2_child[i].newfd >= 3) return 1;
+    for (i = 0; i < actions->fd_close_count; i++)
+        if (actions->fd_close[i] >= 3) return 1;
+    return 0;
+}
+
+/* Fill *st from the spawnspec: lpReserved2 buffer, std handles and pty state.
+ * Returns 0 with errno set on allocation failure.  Caller must hold the GVL
+ * and later free st->reserved2 / close st->duped. */
 static int
 prepare_inherit_state(const struct rb_w32_spawnspec *actions,
                       HANDLE hInput, HANDLE hOutput, HANDLE hError,
                       struct rb_w32_inherit_state *st)
 {
     memset(st, 0, sizeof(*st));
+
+    /* Reference the pseudoconsole (if any) for the attribute list. */
+    if (actions)
+        st->hPseudoConsole = actions->hPseudoConsole;
 
     /* Carry the environment block (NULL = inherit) for lpEnvironment. */
     st->env_block = actions ? actions->env_block : NULL;
@@ -3380,11 +3423,33 @@ prepare_inherit_state(const struct rb_w32_spawnspec *actions,
         ? (const intptr_t *)(st->reserved2 + sizeof(int) + st->inherit_count)
         : NULL;
 
+    /* Conpty-backed std streams (not explicitly redirected) stay NULL in hStd
+     * so the pseudoconsole supplies them. */
+    int conpty_stream[3] = {0, 0, 0};
+    if (st->hPseudoConsole) {
+        for (int i = 0; i < 3; i++)
+            conpty_stream[i] = !spawnspec_targets_fd(actions, i);
+    }
+
     /* Duplicate non-inheritable handles with bInheritHandle=TRUE instead of
      * toggling (which would race other spawning threads); the child's CRT
      * and the handle list see the duplicate.  Closed by the caller. */
     if (st->reserved2) {
         intptr_t *ph = (intptr_t *)(st->reserved2 + sizeof(int) + st->inherit_count);
+        unsigned char *pf = (unsigned char *)(st->reserved2 + sizeof(int));
+
+        /* Clear the lpReserved2 slot of conpty-backed standard streams so the
+         * child does not inherit the parent's handle for them. */
+        if (st->hPseudoConsole) {
+            for (int i = 0; i < 3; i++) {
+                if (conpty_stream[i] && st->inherit_count > i &&
+                    (pf[i] & FOPEN)) {
+                    ph[i] = (intptr_t)INVALID_HANDLE_VALUE;
+                    pf[i] = 0;
+                }
+            }
+        }
+
         st->duped = (HANDLE *)malloc((size_t)(st->inherit_count + 3) * sizeof(HANDLE));
         if (!st->duped) {
             errno = ENOMEM;
@@ -3424,19 +3489,22 @@ prepare_inherit_state(const struct rb_w32_spawnspec *actions,
         spawnspec_targets_fd(actions, 1),
         spawnspec_targets_fd(actions, 2)
     };
-    st->hStd[0] = hInput ? hInput
+    st->hStd[0] = conpty_stream[0] ? NULL
+        : hInput ? hInput
         : (st->reserved2 && st->inherit_count > 0 &&
            st->p_handle[0] != (intptr_t)INVALID_HANDLE_VALUE &&
            (st->p_flags[0] & FOPEN))
           ? (HANDLE)st->p_handle[0]
           : std_targeted[0] ? NULL : GetStdHandle(STD_INPUT_HANDLE);
-    st->hStd[1] = hOutput ? hOutput
+    st->hStd[1] = conpty_stream[1] ? NULL
+        : hOutput ? hOutput
         : (st->reserved2 && st->inherit_count > 1 &&
            st->p_handle[1] != (intptr_t)INVALID_HANDLE_VALUE &&
            (st->p_flags[1] & FOPEN))
           ? (HANDLE)st->p_handle[1]
           : std_targeted[1] ? NULL : GetStdHandle(STD_OUTPUT_HANDLE);
-    st->hStd[2] = hError ? hError
+    st->hStd[2] = conpty_stream[2] ? NULL
+        : hError ? hError
         : (st->reserved2 && st->inherit_count > 2 &&
            st->p_handle[2] != (intptr_t)INVALID_HANDLE_VALUE &&
            (st->p_flags[2] & FOPEN))
@@ -3450,6 +3518,25 @@ prepare_inherit_state(const struct rb_w32_spawnspec *actions,
                            std_targeted[0] || std_targeted[1] || std_targeted[2] ||
                            hInput != NULL || hOutput != NULL || hError != NULL);
 
+    /* Pure conpty spawn: drop table and duplicates so nothing is inherited;
+     * the child stdio resolves via the conpty. */
+    if (st->hPseudoConsole && !st->use_std_handles &&
+        !spawnspec_has_nonstd_redirect(actions)) {
+        if (st->reserved2) {
+            free(st->reserved2);
+            st->reserved2 = NULL;
+        }
+        st->cbReserved2 = 0;
+        st->inherit_count = 0;
+        st->p_flags = NULL;
+        st->p_handle = NULL;
+        for (int i = 0; i < st->duped_count; i++)
+            CloseHandle(st->duped[i]);
+        free(st->duped);
+        st->duped = NULL;
+        st->duped_count = 0;
+    }
+
     return 1;
 }
 
@@ -3462,6 +3549,14 @@ prepare_inheritable_handle_list(struct rb_w32_inherit_state *st)
     int inherit_count = st->inherit_count;
     const unsigned char *p_flags = st->p_flags;
     const intptr_t *p_handle = st->p_handle;
+
+    /* Pure conpty spawn without a table: inherit nothing; explicit redirects
+     * still use the list below. */
+    if (st->hPseudoConsole && !st->use_std_handles && !st->reserved2) {
+        st->keep = NULL;
+        st->keep_count = 0;
+        return 1;
+    }
 
     st->keep = (HANDLE *)malloc((size_t)(inherit_count + 3) * sizeof(HANDLE));
     if (!st->keep) {
@@ -3498,8 +3593,8 @@ prepare_inheritable_handle_list(struct rb_w32_inherit_state *st)
     return 1;
 }
 
-/* Attribute list for st->keep (plus PSEUDOCONSOLE when enabled).  Returns
- * the list (caller frees it) or NULL with errno set (st->keep freed). */
+/* Restrict inheritance to st->keep, plus PSEUDOCONSOLE when enabled.  Returns
+ * the list (caller frees it) or NULL with errno set (st->keep freed here). */
 #ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
 /* Not declared by the SDK when _WIN32_WINNT is below Windows 10; define it so
  * the future PTY wiring compiles on older targets.  hPseudoConsole is NULL
@@ -3508,11 +3603,15 @@ prepare_inheritable_handle_list(struct rb_w32_inherit_state *st)
     ProcThreadAttributeValue(22, FALSE, TRUE, FALSE)
 #endif
 static LPPROC_THREAD_ATTRIBUTE_LIST
-build_attribute_list(struct rb_w32_inherit_state *st, HANDLE hPseudoConsole)
+build_attribute_list(struct rb_w32_inherit_state *st)
 {
-    DWORD attr_count = 1 + (hPseudoConsole ? 1 : 0);
+    HANDLE hPseudoConsole = st->hPseudoConsole;
+    DWORD attr_count = (st->keep_count > 0 ? 1 : 0) + (hPseudoConsole ? 1 : 0);
     SIZE_T attrsize = 0;
     LPPROC_THREAD_ATTRIBUTE_LIST attrlist = NULL;
+
+    if (attr_count == 0)
+        return NULL;            /* nothing to put in the attribute list */
 
     InitializeProcThreadAttributeList(NULL, attr_count, 0, &attrsize);
     attrlist = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(attrsize);
@@ -3526,16 +3625,15 @@ build_attribute_list(struct rb_w32_inherit_state *st, HANDLE hPseudoConsole)
         goto fail_nomem;
     }
 
-    if (!UpdateProcThreadAttribute(attrlist, 0,
-                                   PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                                   st->keep,
-                                   (SIZE_T)st->keep_count * sizeof(HANDLE),
-                                   NULL, NULL))
+    if (st->keep_count > 0 &&
+        !UpdateProcThreadAttribute(attrlist, 0,
+                                    PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                    st->keep,
+                                    (SIZE_T)st->keep_count * sizeof(HANDLE),
+                                    NULL, NULL))
         goto fail_free;
 
-    /* Future PTY support: a non-NULL hPseudoConsole wires up the child's
-     * pseudoconsole.  Adding the attribute here keeps CreateChild untouched
-     * when that work lands. */
+    /* Attach the pseudoconsole when enabled. */
     if (hPseudoConsole &&
         !UpdateProcThreadAttribute(attrlist, 0,
                                    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,

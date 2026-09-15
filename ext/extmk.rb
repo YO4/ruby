@@ -491,7 +491,7 @@ default_exclude_exts =
   when $cygwin
     %w''
   when $mswin, $mingw
-    %w'pty syslog'
+    %w'syslog'
   else
     %w'*win32*'
   end
