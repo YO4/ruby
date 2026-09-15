@@ -1193,6 +1193,35 @@ child_result(struct ChildRecord *child, int mode)
     return child->pid;
 }
 
+/* Child-process request set, private to win32.c.  Built only through
+ * rb_w32_spawnspec_*; the fd_* arrays grow as entries are added. */
+struct rb_w32_fd_pair {
+    int oldfd;   /* source fd */
+    int newfd;   /* target fd */
+};
+
+struct rb_w32_spawnspec {
+    int close_others_maxhint;
+    int close_others_do;
+    int fd_close_count;
+    int fd_close_cap;
+    int *fd_close;
+    int fd_dup2_count;
+    int fd_dup2_cap;
+    struct rb_w32_fd_pair *fd_dup2;
+    int fd_dup2_child_count;
+    int fd_dup2_child_cap;
+    struct rb_w32_fd_pair *fd_dup2_child;
+
+    /* UTF-16LE child environment block for CreateProcessW (NULL = inherit).
+     * Owned here; freed by rb_w32_spawnspec_destroy. */
+    WCHAR *env_block;
+
+    /* PATH value from env_block (UTF-8, NULL if none): w32_spawn resolves
+     * bare commands against the child's PATH, not ours.  Owned here. */
+    char *path_override;
+};
+
 /* Per-spawn state for CreateChild: lpReserved2 buffer, resolved std handles
  * and handle-list scratch. */
 struct rb_w32_inherit_state {
@@ -1214,6 +1243,10 @@ struct rb_w32_inherit_state {
      * HANDLE_LIST).  Owned here; closed/freed by the caller. */
     HANDLE *duped;
     int duped_count;
+
+    /* UTF-16LE child environment block from rb_w32_spawnspec_addenv (NULL =
+     * inherit).  Referenced only; freed by rb_w32_spawnspec_destroy. */
+    const WCHAR *env_block;
 };
 
 /* Forward declarations: the inherit-state helpers are defined later, right
@@ -1284,6 +1317,10 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
 
     dwCreationFlags |= NORMAL_PRIORITY_CLASS;
 
+    /* A UTF-16LE block needs CREATE_UNICODE_ENVIRONMENT (NULL inherits). */
+    if (st.env_block)
+        dwCreationFlags |= CREATE_UNICODE_ENVIRONMENT;
+
     if (lstrlenW(cmd) > 32767) {
         for (int i = 0; i < st.duped_count; i++)
             CloseHandle(st.duped[i]);
@@ -1337,7 +1374,8 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
 
     RUBY_CRITICAL {
         fRet = CreateProcessW(prog, (WCHAR *)cmd, &sa, &sa,
-                              sa.bInheritHandle, dwCreationFlags, NULL, NULL,
+                              sa.bInheritHandle, dwCreationFlags,
+                              (LPWSTR)st.env_block, NULL,
                               attrlist ? &aStartupInfoEx.StartupInfo : &aStartupInfo,
                               &aProcessInformation);
         if (!fRet)
@@ -1409,7 +1447,9 @@ w32_spawn(int mode, const char *cmd, const char *prog, UINT cp,
     if (check_spawn_mode(mode)) return -1;
 
     if (prog) {
-        if (!(p = dln_find_exe_r(prog, NULL, fbuf, sizeof(fbuf)))) {
+        const char *search_path = (actions && actions->path_override)
+            ? actions->path_override : NULL;
+        if (!(p = dln_find_exe_r(prog, search_path, fbuf, sizeof(fbuf)))) {
             shell = prog;
         }
         else {
@@ -1472,7 +1512,9 @@ w32_spawn(int mode, const char *cmd, const char *prog, UINT cp,
                     break;
                 }
             }
-            shell = dln_find_exe_r(shell, NULL, fbuf, sizeof(fbuf));
+            shell = dln_find_exe_r(shell,
+                (actions && actions->path_override) ? actions->path_override : NULL,
+                fbuf, sizeof(fbuf));
             if (p && slash) translate_char(p, '/', '\\', cp);
             if (!shell) {
                 shell = p ? p : cmd;
@@ -1579,7 +1621,9 @@ w32_spawn_process(int mode, const char *prog, char *const *argv,
         prog = shell;
         c_switch = 1;
     }
-    else if ((cmd = dln_find_exe_r(prog, NULL, fbuf, sizeof(fbuf)))) {
+    else if ((cmd = dln_find_exe_r(prog,
+                  (actions && actions->path_override) ? actions->path_override : NULL,
+                  fbuf, sizeof(fbuf)))) {
         if (cmd == prog) strlcpy(cmd = fbuf, prog, sizeof(fbuf));
         translate_char(cmd, '/', '\\', cp);
         prog = cmd;
@@ -2797,27 +2841,6 @@ rb_w32_set_cloexec(int fd, int cloexec)
     return 0;
 }
 
-/* Child-process request set, private to win32.c.  Built only through
- * rb_w32_spawnspec_*; the fd_* arrays grow as entries are added. */
-struct rb_w32_fd_pair {
-    int oldfd;   /* source fd */
-    int newfd;   /* target fd */
-};
-
-struct rb_w32_spawnspec {
-    int close_others_maxhint;
-    int close_others_do;
-    int fd_close_count;
-    int fd_close_cap;
-    int *fd_close;
-    int fd_dup2_count;
-    int fd_dup2_cap;
-    struct rb_w32_fd_pair *fd_dup2;
-    int fd_dup2_child_count;
-    int fd_dup2_child_cap;
-    struct rb_w32_fd_pair *fd_dup2_child;
-};
-
 struct rb_w32_spawnspec *
 rb_w32_spawnspec_init(void)
 {
@@ -2833,7 +2856,131 @@ rb_w32_spawnspec_destroy(struct rb_w32_spawnspec *actions)
     if (actions->fd_close) xfree(actions->fd_close);
     if (actions->fd_dup2) xfree(actions->fd_dup2);
     if (actions->fd_dup2_child) xfree(actions->fd_dup2_child);
+    if (actions->env_block) xfree(actions->env_block);
+    if (actions->path_override) xfree(actions->path_override);
     xfree(actions);
+}
+
+/* Build the UTF-16LE child environment block for CreateProcessW from the
+ * UTF-8 "KEY=VALUE" list.  envp==NULL resets to inherit; an entry-less
+ * block gets SystemRoot (CreateProcessW rejects empty blocks). */
+void
+rb_w32_spawnspec_addenv(struct rb_w32_spawnspec *actions,
+                            char *const *envp)
+{
+    if (!actions) return;
+
+    if (actions->env_block) {
+        xfree(actions->env_block);
+        actions->env_block = NULL;
+    }
+    if (!envp) return;
+
+    /* Carry over the OS cwd entries ('='-led, contiguous at the head). */
+    WCHAR *os_env = GetEnvironmentStringsW();
+    if (!os_env) {
+        errno = ENOMEM;
+        return;
+    }
+    WCHAR *first_cwd = os_env;
+    WCHAR *last_cwd = os_env;
+    while (last_cwd[0] == L'=' && last_cwd[1] != L'\0' &&
+           last_cwd[2] == L':' && last_cwd[3] == L'=') {
+        last_cwd += 4 + lstrlenW(last_cwd + 4) + 1;
+    }
+    /* If the block does not start with cwd entries, copy none of them. */
+    if (last_cwd == os_env)
+        first_cwd = os_env;
+    size_t cwd_chars = (size_t)(last_cwd - first_cwd);
+
+    /* Size the block: cwd entries + each "KEY=VALUE" + double NUL. */
+    size_t envp_chars = 2; /* double NUL terminator */
+    size_t nentries = 0;
+    for (char *const *it = envp; *it; it++) {
+        const char *e = *it;
+        /* Record the PATH entry so w32_spawn resolves a bare command against
+         * the child's PATH, not this process's. */
+        if ((e[0] == 'P' || e[0] == 'p') &&
+            (e[1] == 'A' || e[1] == 'a') &&
+            (e[2] == 'T' || e[2] == 't') &&
+            (e[3] == 'H' || e[3] == 'h') && e[4] == '=') {
+            if (actions->path_override) xfree(actions->path_override);
+            actions->path_override = (char *)xmalloc(strlen(e + 5) + 1);
+            strcpy(actions->path_override, e + 5);
+        }
+        WCHAR *w = utf8_to_wstr(e, NULL);
+        if (!w) {
+            FreeEnvironmentStringsW(os_env);
+            errno = ENOMEM;
+            return;
+        }
+        envp_chars += lstrlenW(w) + 1;
+        nentries++;
+        xfree(w);
+    }
+
+    /* Empty blocks fail in CreateProcessW: fall back to SystemRoot like
+     * UCRT does (any entry or cwd entry disables this). */
+    WCHAR sysroot_entry[11 + MAX_PATH + 1]; /* "SystemRoot=" + value + NUL */
+    size_t sysroot_chars = 0; /* WCHARs incl. NUL, or 0 when disabled */
+    if (cwd_chars == 0 && nentries == 0) {
+        DWORD vlen = GetEnvironmentVariableW(L"SystemRoot",
+                                             sysroot_entry + 11, MAX_PATH);
+        if (vlen == 0 || vlen >= MAX_PATH) {
+            UINT wlen = GetSystemWindowsDirectoryW(sysroot_entry + 11,
+                                                   MAX_PATH);
+            if (wlen == 0 || wlen >= MAX_PATH)
+                vlen = 0;
+            else
+                vlen = wlen;
+        }
+        if (vlen > 0) {
+            memcpy(sysroot_entry, L"SystemRoot=", 11 * sizeof(WCHAR));
+            sysroot_entry[11 + vlen] = L'\0';
+            sysroot_chars = (size_t)11 + vlen + 1;
+            envp_chars += sysroot_chars;
+        }
+    }
+
+    size_t total_chars = cwd_chars + envp_chars;
+    WCHAR *block = (WCHAR *)xmalloc(total_chars * sizeof(WCHAR));
+    if (!block) {
+        FreeEnvironmentStringsW(os_env);
+        errno = ENOMEM;
+        return;
+    }
+
+    WCHAR *dst = block;
+    if (cwd_chars) {
+        memcpy(dst, first_cwd, cwd_chars * sizeof(WCHAR));
+        dst += cwd_chars;
+    }
+    for (char *const *it = envp; *it; it++) {
+        WCHAR *w = utf8_to_wstr(*it, NULL);
+        if (!w) {
+            xfree(block);
+            FreeEnvironmentStringsW(os_env);
+            errno = ENOMEM;
+            return;
+        }
+        size_t len = lstrlenW(w) + 1;
+        memcpy(dst, w, len * sizeof(WCHAR));
+        dst += len;
+        xfree(w);
+    }
+    if (sysroot_chars) {
+        memcpy(dst, sysroot_entry, sysroot_chars * sizeof(WCHAR));
+        dst += sysroot_chars;
+    }
+    /* Double NUL terminator (the loop wrote one NUL per entry; ensure the block
+     * ends with an extra NUL so an empty block still has the required two). */
+    *dst = L'\0';
+    if (dst == block)
+        *dst++ = L'\0';
+
+    actions->env_block = block;
+
+    FreeEnvironmentStringsW(os_env);
 }
 
 static void
@@ -3113,6 +3260,8 @@ prepare_inherit_state(const struct rb_w32_spawnspec *actions,
 {
     memset(st, 0, sizeof(*st));
 
+    /* Carry the environment block (NULL = inherit) for lpEnvironment. */
+    st->env_block = actions ? actions->env_block : NULL;
     /* lpReserved2: the child's CRT reads it back to discover which fds/handles
      * to inherit.  See make_lpReserved2 for the buffer layout.  NULL with
      * errno == 0 means "nothing to inherit" (max_fd < 0), not an error. */
