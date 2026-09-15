@@ -1220,6 +1220,14 @@ struct rb_w32_spawnspec {
     /* PATH value from env_block (UTF-8, NULL if none): w32_spawn resolves
      * bare commands against the child's PATH, not ours.  Owned here. */
     char *path_override;
+
+    /* UTF-16LE child working directory for CreateProcessW (NULL = inherit).
+     * Owned here; freed by rb_w32_spawnspec_destroy. */
+    WCHAR *cwd;
+
+    /* :new_pgroup: CreateChild adds CREATE_NEW_PROCESS_GROUP.  Set via
+     * rb_w32_spawnspec_new_pgroup. */
+    int new_pgroup;
 };
 
 /* Per-spawn state for CreateChild: lpReserved2 buffer, resolved std handles
@@ -1247,6 +1255,13 @@ struct rb_w32_inherit_state {
     /* UTF-16LE child environment block from rb_w32_spawnspec_addenv (NULL =
      * inherit).  Referenced only; freed by rb_w32_spawnspec_destroy. */
     const WCHAR *env_block;
+
+    /* Child working directory from rb_w32_spawnspec_adddir (NULL = inherit).
+     * Referenced only; freed by rb_w32_spawnspec_destroy. */
+    const WCHAR *cwd;
+
+    /* :new_pgroup request from rb_w32_spawnspec_new_pgroup. */
+    int new_pgroup;
 };
 
 /* Forward declarations: the inherit-state helpers are defined later, right
@@ -1321,6 +1336,10 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
     if (st.env_block)
         dwCreationFlags |= CREATE_UNICODE_ENVIRONMENT;
 
+    /* :new_pgroup asks the child to start a fresh console process group. */
+    if (st.new_pgroup)
+        dwCreationFlags |= CREATE_NEW_PROCESS_GROUP;
+
     if (lstrlenW(cmd) > 32767) {
         for (int i = 0; i < st.duped_count; i++)
             CloseHandle(st.duped[i]);
@@ -1375,7 +1394,7 @@ CreateChild(struct ChildRecord *child, const WCHAR *cmd, const WCHAR *prog,
     RUBY_CRITICAL {
         fRet = CreateProcessW(prog, (WCHAR *)cmd, &sa, &sa,
                               sa.bInheritHandle, dwCreationFlags,
-                              (LPWSTR)st.env_block, NULL,
+                               (LPWSTR)st.env_block, (LPWSTR)st.cwd,
                               attrlist ? &aStartupInfoEx.StartupInfo : &aStartupInfo,
                               &aProcessInformation);
         if (!fRet)
@@ -1705,10 +1724,9 @@ rb_w32_uaspawn(int mode, const char *prog, char *const *argv)
 /* License: Ruby's */
 rb_pid_t
 rb_w32_uaspawn_spec(int mode, const char *prog, char *const *argv,
-                       DWORD flags,
-                       const struct rb_w32_spawnspec *actions)
+                    const struct rb_w32_spawnspec *actions)
 {
-    return w32_spawn_process(mode, prog, argv, -1, -1, -1, flags, CP_UTF8, actions);
+    return w32_spawn_process(mode, prog, argv, -1, -1, -1, 0, CP_UTF8, actions);
 }
 
 /* License: Ruby's */
@@ -2858,6 +2876,7 @@ rb_w32_spawnspec_destroy(struct rb_w32_spawnspec *actions)
     if (actions->fd_dup2_child) xfree(actions->fd_dup2_child);
     if (actions->env_block) xfree(actions->env_block);
     if (actions->path_override) xfree(actions->path_override);
+    if (actions->cwd) xfree(actions->cwd);
     xfree(actions);
 }
 
@@ -2981,6 +3000,79 @@ rb_w32_spawnspec_addenv(struct rb_w32_spawnspec *actions,
     actions->env_block = block;
 
     FreeEnvironmentStringsW(os_env);
+}
+
+/* Store the child's working directory (UTF-8 dir -> absolute UTF-16LE) for
+ * lpCurrentDirectory.  NULL dir resets to inherit.  The old value is kept
+ * on failure (errno set). */
+int
+rb_w32_spawnspec_adddir(struct rb_w32_spawnspec *actions,
+                            const char *dir)
+{
+    if (!actions) return -1;
+
+    if (!dir) {
+        if (actions->cwd) {
+            xfree(actions->cwd);
+            actions->cwd = NULL;
+        }
+        return 0;
+    }
+
+    WCHAR *w = utf8_to_wstr(dir, NULL);
+    if (!w) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    /* Absolute path: relative dirs resolve against our cwd at spawn time. */
+    DWORD need = GetFullPathNameW(w, 0, NULL, NULL);
+    if (need == 0) {
+        DWORD err = GetLastError();
+        xfree(w);
+        errno = map_errno(err);
+        return -1;
+    }
+    WCHAR *full = xmalloc((size_t)need * sizeof(WCHAR));
+    DWORD got = GetFullPathNameW(w, need, full, NULL);
+    xfree(w);
+    if (got == 0) {
+        DWORD err = GetLastError();
+        xfree(full);
+        errno = map_errno(err);
+        if (errno == 0)
+            errno = EINVAL;
+        return -1;
+    }
+    if (got >= need) {
+        /* Raced growth between the two calls; need includes the NUL. */
+        xfree(full);
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* Fail like chdir(2): missing directory is ENOENT, not ENOTDIR. */
+    DWORD attr = GetFileAttributesW(full);
+    if (attr == INVALID_FILE_ATTRIBUTES ||
+        !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        DWORD err = GetLastError();
+        xfree(full);
+        errno = (attr == INVALID_FILE_ATTRIBUTES && err == ERROR_DIRECTORY)
+                    ? ENOENT : map_errno(err);
+        return -1;
+    }
+    if (actions->cwd)
+        xfree(actions->cwd);
+    actions->cwd = full;
+    return 0;
+}
+
+/* Mark the child as a new console process group (:new_pgroup). */
+void
+rb_w32_spawnspec_new_pgroup(struct rb_w32_spawnspec *actions)
+{
+    if (!actions) return;
+    actions->new_pgroup = 1;
 }
 
 static void
@@ -3262,6 +3354,13 @@ prepare_inherit_state(const struct rb_w32_spawnspec *actions,
 
     /* Carry the environment block (NULL = inherit) for lpEnvironment. */
     st->env_block = actions ? actions->env_block : NULL;
+
+    /* Carry the working directory (NULL = inherit) for lpCurrentDirectory. */
+    st->cwd = actions ? actions->cwd : NULL;
+
+    /* Carry :new_pgroup for the creation flags. */
+    st->new_pgroup = actions ? actions->new_pgroup : 0;
+
     /* lpReserved2: the child's CRT reads it back to discover which fds/handles
      * to inherit.  See make_lpReserved2 for the buffer layout.  NULL with
      * errno == 0 means "nothing to inherit" (max_fd < 0), not an error. */

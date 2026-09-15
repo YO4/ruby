@@ -7738,7 +7738,7 @@ pipe_open(VALUE execarg_obj, const char *modestr, enum rb_io_mode fmode,
         }
         if (args) {
             pid = rb_w32_uaspawn_spec(P_NOWAIT,
-                                      cmd, args, 0, actions);
+                                      cmd, args, actions);
         }
         else {
             pid = rb_w32_uspawn_spec(P_NOWAIT, cmd, NULL,
