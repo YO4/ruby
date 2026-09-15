@@ -5685,7 +5685,9 @@ rb_io_getc(VALUE io)
     rb_io_check_char_readable(fptr);
 
     enc = io_input_encoding(fptr);
-    READ_CHECK(fptr);
+    if (!READ_CHAR_PENDING(fptr)) {
+        READ_CHECK(fptr);
+    }
     return io_getc(fptr, enc);
 }
 
