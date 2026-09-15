@@ -861,7 +861,6 @@ class TestProcess < Test::Unit::TestCase
                          STDERR=>"out", STDOUT=>[:child, STDERR])
       assert_equal("errout", File.read("out"))
 
-      omit "inheritance of fd other than stdin,stdout and stderr is not supported" if windows?
       Process.wait spawn(RUBY, "-e", "STDERR.print 'err'; STDOUT.print 'out'",
                          STDOUT=>"out",
                          STDERR=>[:child, 3],
@@ -913,7 +912,6 @@ class TestProcess < Test::Unit::TestCase
   end
 
   def test_execopts_popen_extra_fd
-    omit "inheritance of fd other than stdin,stdout and stderr is not supported" if windows?
     with_tmpchdir {|d|
       with_pipe {|r, w|
         IO.popen([RUBY, '-e', 'IO.new(3, "w").puts("a"); puts "b"', 3=>w]) {|io|
@@ -1002,7 +1000,6 @@ class TestProcess < Test::Unit::TestCase
   end
 
   def test_execopts_close_others
-    omit "inheritance of fd other than stdin,stdout and stderr is not supported" if windows?
     with_tmpchdir {|d|
       with_pipe {|r, w|
         system(RUBY, '-e', 'STDERR.reopen("err", "w"); IO.new(ARGV[0].to_i, "w").puts("ma")', w.fileno.to_s, :close_others=>true)
@@ -1098,7 +1095,7 @@ class TestProcess < Test::Unit::TestCase
     rescue NotImplementedError
       omit "IO#close_on_exec= is not supported"
     end
-  end unless windows? # passing non-stdio fds is not supported on Windows
+  end
 
   def test_execopts_redirect_tempfile
     bug6269 = '[ruby-core:44181]'

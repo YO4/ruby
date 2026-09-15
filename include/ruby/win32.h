@@ -323,11 +323,33 @@ extern rb_pid_t wait(int *);
 extern rb_pid_t rb_w32_uspawn(int, const char *, const char*);
 extern rb_pid_t rb_w32_uaspawn(int, const char *, char *const *);
 extern rb_pid_t rb_w32_uaspawn_flags(int, const char *, char *const *, DWORD);
+
+/* Opaque builder for child-process redirection requests (lpReserved2 table
+ * built in win32.c; layout private).  Callers use only the accessors below. */
+struct rb_w32_spawnspec;
+extern struct rb_w32_spawnspec *rb_w32_spawnspec_init(void);
+extern void rb_w32_spawnspec_destroy(struct rb_w32_spawnspec *actions);
+extern void rb_w32_spawnspec_addclose(struct rb_w32_spawnspec *actions, int fd);
+extern void rb_w32_spawnspec_adddup2(struct rb_w32_spawnspec *actions,
+                                         int oldfd, int newfd);
+extern void rb_w32_spawnspec_adddup2_child(struct rb_w32_spawnspec *actions,
+                                               int oldfd, int newfd);
+
+extern rb_pid_t rb_w32_uaspawn_spec(int mode, const char *prog, char *const *argv,
+                                       DWORD flags,
+                                       const struct rb_w32_spawnspec *actions);
+extern rb_pid_t rb_w32_uspawn_spec(int mode, const char *cmd, const char *prog,
+                                      const struct rb_w32_spawnspec *actions);
 #undef HAVE_KILL
 #define HAVE_KILL 1
 extern int kill(rb_pid_t, int);
 extern int fcntl(int, int, ...);
 extern int rb_w32_set_nonblock(int);
+/* Read the CRT _osfile entry (FNOINHERIT bit) for the inherit table. */
+extern unsigned char rb_w32_get_osfile(int);
+/* fcntl(F_SETFD) on Windows: syncs HANDLE_FLAG_INHERIT with FNOINHERIT.
+ * Returns 0, or -1 with errno set. */
+extern int rb_w32_set_cloexec(int fd, int cloexec);
 extern rb_pid_t rb_w32_getpid(void);
 extern rb_pid_t rb_w32_getppid(void);
 extern int rb_w32_isatty(int);
