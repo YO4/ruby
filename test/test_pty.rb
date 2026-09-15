@@ -10,13 +10,28 @@ end
 
 class TestPTY < Test::Unit::TestCase
   RUBY = EnvUtil.rubybin
+  WINDOWS_PTY = /mswin|mingw/ =~ RUBY_PLATFORM
+  # "cat" is not always available on Windows; read stdin to EOF instead.
+  CAT = WINDOWS_PTY ? [RUBY, "-e", "STDIN.read"] : "cat"
+
+  # ConPTY renders child output as a terminal screen: input-mode reports,
+  # cursor hide/show, clear-screen and title updates wrap the payload.
+  # Strip those control sequences so assertions compare the payload
+  # like on Unix PTYs.
+  def pty_gets(io)
+    line = io.gets
+    if WINDOWS_PTY
+      line = line.gsub(/\e\][^\a]*\a/, "").gsub(/\e\[[0-9;?]*[a-zA-Z]/, "")
+    end
+    line
+  end
 
   def test_spawn_without_block
     r, w, pid = PTY.spawn(RUBY, '-e', 'puts "a"; sleep 0.1')
   rescue RuntimeError
     omit $!
   else
-    assert_equal("a\r\n", r.gets)
+    assert_equal("a\r\n", pty_gets(r))
   ensure
     r&.close
     w&.close
@@ -26,7 +41,7 @@ class TestPTY < Test::Unit::TestCase
   def test_spawn_with_block
     PTY.spawn(RUBY, '-e', 'puts "b"; sleep 0.1') {|r,w,pid|
       begin
-        assert_equal("b\r\n", r.gets)
+        assert_equal("b\r\n", pty_gets(r))
       ensure
         r.close
         w.close
@@ -38,10 +53,15 @@ class TestPTY < Test::Unit::TestCase
   end
 
   def test_commandline
-    commandline = Shellwords.join([RUBY, '-e', 'puts "foo"; sleep 0.1'])
+    # Shellwords.join quotes for POSIX shells; cmd.exe mangles the
+    # backslash escapes (and the child ends up waiting on stdin),
+    # so build a Windows-style command line here.
+    commandline = WINDOWS_PTY ?
+      %Q{"#{RUBY}" -e "puts 'foo'; sleep 0.1"} :
+      Shellwords.join([RUBY, '-e', 'puts "foo"; sleep 0.1'])
     PTY.spawn(commandline) {|r,w,pid|
       begin
-        assert_equal("foo\r\n", r.gets)
+        assert_equal("foo\r\n", pty_gets(r))
       ensure
         r.close
         w.close
@@ -55,7 +75,7 @@ class TestPTY < Test::Unit::TestCase
   def test_argv0
     PTY.spawn([RUBY, "argv0"], '-e', 'puts "bar"; sleep 0.1') {|r,w,pid|
       begin
-        assert_equal("bar\r\n", r.gets)
+        assert_equal("bar\r\n", pty_gets(r))
       ensure
         r.close
         w.close
@@ -67,6 +87,7 @@ class TestPTY < Test::Unit::TestCase
   end
 
   def test_open_without_block
+    omit "PTY.open is not implemented on Windows" if WINDOWS_PTY
     ret = PTY.open
   rescue RuntimeError
     omit $!
@@ -86,6 +107,7 @@ class TestPTY < Test::Unit::TestCase
   end
 
   def test_open_with_block
+    omit "PTY.open is not implemented on Windows" if WINDOWS_PTY
     r = nil
     x = Object.new
     y = PTY.open {|ret|
@@ -108,6 +130,7 @@ class TestPTY < Test::Unit::TestCase
   end
 
   def test_close_in_block
+    omit "PTY.open is not implemented on Windows" if WINDOWS_PTY
     PTY.open {|master, slave|
       slave.close
       master.close
@@ -126,6 +149,7 @@ class TestPTY < Test::Unit::TestCase
   end
 
   def test_open
+    omit "PTY.open is not implemented on Windows" if WINDOWS_PTY
     PTY.open {|master, slave|
       slave.puts "foo"
       assert_equal("foo", master.gets.chomp)
@@ -137,6 +161,7 @@ class TestPTY < Test::Unit::TestCase
   end
 
   def test_stat_slave
+    omit "PTY.open is not implemented on Windows" if WINDOWS_PTY
     PTY.open {|master, slave|
       s =  File.stat(slave.path)
       assert_equal(Process.uid, s.uid)
@@ -147,6 +172,7 @@ class TestPTY < Test::Unit::TestCase
   end
 
   def test_close_master
+    omit "PTY.open is not implemented on Windows" if WINDOWS_PTY
     PTY.open {|master, slave|
       master.close
       assert_raise(EOFError) { slave.readpartial(10) }
@@ -156,6 +182,7 @@ class TestPTY < Test::Unit::TestCase
   end
 
   def test_close_slave
+    omit "PTY.open is not implemented on Windows" if WINDOWS_PTY
     PTY.open {|master, slave|
       slave.close
       # This exception is platform dependent.
@@ -184,7 +211,7 @@ class TestPTY < Test::Unit::TestCase
   def test_pty_check_default
     st1 = st2 = pid = nil
     `echo` # preset $?
-    PTY.spawn("cat") do |r,w,id|
+    PTY.spawn(*CAT) do |r,w,id|
       pid = id
       st1 = PTY.check(pid)
       w.close
@@ -203,7 +230,7 @@ class TestPTY < Test::Unit::TestCase
   def test_pty_check_raise
     bug2642 = '[ruby-dev:44600]'
     st1 = st2 = pid = nil
-    PTY.spawn("cat") do |r,w,id|
+    PTY.spawn(*CAT) do |r,w,id|
       pid = id
       assert_nothing_raised(PTY::ChildExited, bug2642) {st1 = PTY.check(pid, true)}
       w.close
@@ -219,10 +246,12 @@ class TestPTY < Test::Unit::TestCase
   end
 
   def test_cloexec
-    PTY.open {|m, s|
-      assert(m.close_on_exec?)
-      assert(s.close_on_exec?)
-    }
+    unless WINDOWS_PTY # PTY.open is not implemented on Windows
+      PTY.open {|m, s|
+        assert(m.close_on_exec?)
+        assert(s.close_on_exec?)
+      }
+    end
     PTY.spawn(RUBY, '-e', '') {|r, w, pid|
       begin
         assert(r.close_on_exec?)
